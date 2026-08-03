@@ -9,6 +9,26 @@
 
 **One code fix required:** `package.json` originally pinned `jsonwebtoken@^9.1.0`, which doesn't exist on npm (latest is `9.0.2`). Changed to `^9.0.2` so `npm install` would succeed.
 
+## Deployment (2026-08-03 22:22 UTC)
+Live at **https://physicalkey-core-production.up.railway.app** on Railway, with a persistent volume so this isn't just `localhost` anymore.
+
+- **Dockerfile pinned to `node:26-alpine`** rather than trusting whatever Node version Railway's auto-detection (Nixpacks) would have picked — `node:sqlite` needs to actually be available and stable, so this removes that guesswork entirely.
+- **Persistent volume** (`physicalkey-core-volume`, 5GB) mounted at `/app/data`, matching where `lib/db.js` resolves the SQLite file. Verified with the same kind of test as the local persistence check, but against a *real* Railway restart (`railway service restart`, confirmed same deployment ID before/after — not a rebuild): identities, git credentials, and honeypot logs all survived.
+- **Real production secrets**: generated a proper random `SECRET_KEY` (`crypto.randomBytes(48)`) and set it as a Railway environment variable — not the `dev-secret-key-change-in-production` placeholder from `.env`, which never leaves this machine (still gitignored, and Railway's variables are separate from it).
+
+**Two bugs only showed up once this was actually behind a real reverse proxy** — neither reproduces on `localhost`, which is exactly why deploying was worth doing rather than stopping at "works on my machine":
+
+1. **Honeypot IP tracking was useless in production.** `req.ip` resolved to Railway's rotating internal proxy addresses instead of the real client IP — every request from the same test script looked like a different attacker (`uniqueIPs` inflating on every call). Root cause: no `trust proxy` setting at all initially, so Express used the raw socket peer (an internal `100.64.0.x` address), not `X-Forwarded-For`.
+2. **First fix caused a full outage.** Setting `trust proxy: true` (trust the whole forwarded chain) seemed like the right fix, but `express-rate-limit` — mounted globally ahead of every route including `/health` — hard-rejects that as unsafe (`ERR_ERL_PERMISSIVE_TRUST_PROXY`, since an unbounded trust setting is spoofable for rate-limit bypass) and threw on every single request. Production was fully down (`/health` itself timed out) for a few minutes until this was caught via `railway logs` and fixed.
+
+**Actual fix**: `trust proxy` stays a small bounded number (`1`) — safe for `express-rate-limit`, since that's what it's actually protecting. Honeypot logging uses a separate `getClientIp()` helper (in `honeypot/logger.js`, exported for reuse) that reads the real client IP directly from the leftmost `X-Forwarded-For` entry — decoupled from Express's trust-proxy hop-counting, and not used for any access-control decision, so it doesn't carry the same spoofing risk that matters for rate-limiting. Verified live: 21 consecutive test requests all correctly attributed to the one real client IP (`73.118.250.122`), not 12 different ones.
+
+**Known cosmetic leftover, not fixed**: the honeypot log on production still has ~40 stale entries from before this fix, logged with the wrong (rotating internal) IPs. Attempted to clear them via `railway volume files delete`, but that subcommand needs an SSH key I haven't set up — not worth chasing for a cleanup with no real users affected. `totalAttempts`/`uniqueIPs` in `/admin/forensics` will look inflated until that data ages out or someone clears the volume manually.
+
+**Two CLI bugs hit along the way** (Railway CLI v5.30.4, not this codebase): `railway volume add -s <service-name>` crashes with a Rust panic (`Option::unwrap() on a None value`) — works fine with explicit UUIDs (`-p <project-id> -e <env-id> -s <service-id>`) instead of names.
+
+To redeploy after future changes: `cd ~/physicalkey-core/backend && railway up --detach -y`. To check status: `railway status`. To watch logs: `railway logs`.
+
 ## Persistence (2026-08-03 21:37 UTC)
 All state now survives a server restart, backed by `node:sqlite` (built into Node 22+/26 — **zero new npm dependencies**). Database file: `backend/data/physicalkey.db` (gitignored, local runtime data, not source).
 
