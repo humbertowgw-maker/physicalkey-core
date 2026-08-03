@@ -44,14 +44,14 @@ struct ContentView: View {
             Label("Verifying phone…", systemImage: "faceid")
                 .foregroundStyle(.blue)
         case .phoneVerified:
-            VStack(spacing: 8) {
-                Label("Phone verified", systemImage: "checkmark.seal.fill")
-                    .foregroundStyle(.green)
-                Text("Waiting on IoT key device to complete authentication — no physical device exists yet, so this flow stops here.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
+            Label("Phone verified — ready to connect to your key device", systemImage: "checkmark.seal.fill")
+                .foregroundStyle(.green)
+        case .connectingToDevice:
+            Label("Connecting to key device…", systemImage: "wave.3.right")
+                .foregroundStyle(.blue)
+        case .authenticated:
+            Label("Authenticated — full access granted", systemImage: "checkmark.seal.fill")
+                .foregroundStyle(.green)
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.red)
@@ -68,9 +68,12 @@ struct ContentView: View {
         case .ready, .failed:
             Button("Authenticate with Face ID") { viewModel.authenticatePhone() }
                 .buttonStyle(.borderedProminent)
-        case .phoneVerifying:
+        case .phoneVerifying, .connectingToDevice:
             ProgressView()
         case .phoneVerified:
+            Button("Connect to Key Device") { viewModel.connectAndAuthenticateDevice() }
+                .buttonStyle(.borderedProminent)
+        case .authenticated:
             EmptyView()
         }
     }

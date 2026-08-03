@@ -7,7 +7,9 @@ final class AuthViewModel: ObservableObject {
         case notReady
         case ready
         case phoneVerifying
-        case phoneVerified(deviceChallengeId: String) // waiting on real hardware for the device stage
+        case phoneVerified(deviceChallengeId: String, deviceChallenge: String)
+        case connectingToDevice
+        case authenticated(sessionToken: String)
         case failed(String)
     }
 
@@ -16,6 +18,7 @@ final class AuthViewModel: ObservableObject {
 
     private let api = PhysicalKeyAPI(baseURL: URL(string: "https://physicalkey-core-production.up.railway.app")!)
     private let keyManager = KeyManager.shared
+    private let bluetooth = DeviceBluetoothManager()
 
     func onAppear() {
         stage = keyManager.hasIdentity ? .ready : .notReady
@@ -31,9 +34,7 @@ final class AuthViewModel: ObservableObject {
         }
     }
 
-    /// Runs the phone half of the auth flow for real: challenge -> Face ID -> sign ->
-    /// verify. Stops there — the device stage needs a real IoT key fob talking over
-    /// Bluetooth, which doesn't exist yet (see PhysicalKeyAPI.deviceVerify).
+    /// Runs the phone half of the auth flow for real: challenge -> Face ID -> sign -> verify.
     func authenticatePhone() {
         Task {
             stage = .phoneVerifying
@@ -48,9 +49,42 @@ final class AuthViewModel: ObservableObject {
                 let verified = try await api.phoneVerify(challengeId: challenge.challengeId, signature: signature)
                 log("Phone verified. deviceChallengeId: \(verified.deviceChallengeId)")
 
-                stage = .phoneVerified(deviceChallengeId: verified.deviceChallengeId)
+                stage = .phoneVerified(deviceChallengeId: verified.deviceChallengeId, deviceChallenge: verified.deviceChallenge)
             } catch {
                 log("Phone auth failed: \(error)")
+                stage = .failed("\(error)")
+            }
+        }
+    }
+
+    /// Runs the device half: scan/connect over Bluetooth to the key fob (see
+    /// DeviceBluetoothManager — untested on real hardware, no board exists to pair with
+    /// yet), have it sign the device challenge, then finish the backend flow.
+    func connectAndAuthenticateDevice() {
+        guard case .phoneVerified(let deviceChallengeId, let deviceChallenge) = stage else { return }
+
+        Task {
+            stage = .connectingToDevice
+            do {
+                log("Scanning for PhysicalKey device…")
+                let identity = try await bluetooth.connectToDevice()
+                log("Connected to \(identity.deviceId)")
+
+                let signature = try await bluetooth.sign(challenge: deviceChallenge)
+                log("Device signed the challenge")
+
+                let verified = try await api.deviceVerify(
+                    deviceChallengeId: deviceChallengeId,
+                    deviceSignature: signature,
+                    deviceId: identity.deviceId,
+                    publicKeyB64: identity.publicKeyB64
+                )
+                log("Device verified. Full access granted.")
+
+                bluetooth.disconnect()
+                stage = .authenticated(sessionToken: verified.sessionToken)
+            } catch {
+                log("Device auth failed: \(error)")
                 stage = .failed("\(error)")
             }
         }

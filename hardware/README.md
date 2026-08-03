@@ -31,11 +31,13 @@
   compilation is the strongest verification possible without one. BLE pairing, flash
   persistence across power cycles, and the actual signing-on-write behavior are all
   untested beyond "the code that does this compiles correctly."
-- **No phone-side Bluetooth code exists yet.** The iOS app (`mobile/ios/`) doesn't talk
-  BLE to anything — `PhysicalKeyAPI.deviceVerify()` there is still a stub. This firmware
-  defines the GATT protocol (service/characteristic UUIDs, read/write semantics — see
-  comments at the top of the `.ino` file) that the phone app would need to implement
-  against, but nothing on the phone side speaks it yet.
+- **Phone-side Bluetooth code now exists (`mobile/ios/PhysicalKey/DeviceBluetoothManager.swift`)
+  but is equally untested against real hardware.** It was written against this firmware's
+  GATT protocol (service/characteristic UUIDs, read/write semantics — see comments at the
+  top of the `.ino` file), type-checks, and the two sides use identical UUIDs — but neither
+  has ever actually talked to the other, since there's no physical board to pair a phone
+  with. GATT discovery timing, MTU/write-size limits, and notify delivery are all unverified
+  assumptions on both sides until real hardware exists to test against.
 - **Private key is not encrypted at rest.** It's stored via `Preferences` (NVS) in plain
   form. ESP32 supports flash encryption + NVS encryption as a hardware feature, but
   enabling it means burning security eFuses — an irreversible, physical-device operation
@@ -72,9 +74,10 @@ that's the same issue.
 1. **Get a physical ESP32 board** and flash this (`arduino-cli upload` once a board is
    connected, or via the Arduino IDE) — first point anything here actually runs.
 2. **Verify BLE behavior for real**: connect with a generic BLE scanner app (e.g. nRF
-   Connect) first, before writing phone app code against it — read the public key and
-   device ID characteristics, write a test challenge string, confirm a 64-byte signature
-   comes back on the notify characteristic.
-3. **Write the phone app's Bluetooth code** (`mobile/ios/`) to actually speak this
-   protocol, replacing the current `deviceVerify()` stub.
+   Connect) first, before trying the actual phone app — read the public key and device ID
+   characteristics, write a test challenge string, confirm a 64-byte signature comes back
+   on the notify characteristic.
+3. **Pair with the real iOS app** (`mobile/ios/PhysicalKey/DeviceBluetoothManager.swift`
+   already implements this protocol — see that directory's README) and see what breaks;
+   this is the first real end-to-end test of phone ↔ device ↔ backend.
 4. **Decide on flash encryption** before treating this as anything beyond a working demo.
