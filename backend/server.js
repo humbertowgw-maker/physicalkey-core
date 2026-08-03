@@ -9,7 +9,7 @@ import dotenv from 'dotenv';
 import { validatePhoneAttestation } from './auth/phone-auth.js';
 import { validateDeviceSignature, registerDevice } from './auth/device-auth.js';
 import { grantGitAccess, parseBasicAuth, validateGitCredentials } from './git/git-credentials.js';
-import { honeypotLogger, activateHoneypot, getForensicsReport } from './honeypot/logger.js';
+import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
 
 dotenv.config();
 
@@ -17,6 +17,13 @@ const app = express();
 const SECRET_KEY = process.env.SECRET_KEY || 'dev-secret-key';
 const ADMIN_DEVICE_ID = process.env.ADMIN_DEVICE_ID;
 const activeChallenges = new Map();
+
+// Trust proxy is deliberately a small bounded number here, NOT `true` — express-rate-limit
+// hard-rejects (throws on every request) an unbounded "trust the whole chain" setting,
+// since that would let a client bypass per-IP rate limiting by prepending fake
+// X-Forwarded-For entries. This value only feeds rate-limiting's IP key; see
+// getClientIp() below for how the honeypot gets a real client IP for forensic logging.
+app.set('trust proxy', 1);
 
 app.use(helmet());
 app.use(cors());
@@ -60,7 +67,7 @@ app.post('/auth/phone/challenge', honeypotLogger, (req, res) => {
   try {
     const { phoneAttestation } = req.body;
     if (!phoneAttestation) {
-      activateHoneypot(req.ip, 'No phone attestation provided');
+      activateHoneypot(getClientIp(req), 'No phone attestation provided');
       return res.status(400).json({ error: 'Phone attestation required' });
     }
 
@@ -88,7 +95,7 @@ app.post('/auth/phone/verify', honeypotLogger, async (req, res) => {
     const stored = activeChallenges.get(challengeId);
 
     if (!stored) {
-      activateHoneypot(req.ip, 'Challenge not found');
+      activateHoneypot(getClientIp(req), 'Challenge not found');
       return res.status(401).json({ error: 'Challenge expired' });
     }
 
@@ -101,7 +108,7 @@ app.post('/auth/phone/verify', honeypotLogger, async (req, res) => {
     activeChallenges.delete(challengeId); // one-time use: consume regardless of outcome
 
     if (!phoneValid) {
-      activateHoneypot(req.ip, 'Invalid phone attestation');
+      activateHoneypot(getClientIp(req), 'Invalid phone attestation');
       return res.status(401).json({ error: 'Phone verification failed' });
     }
 
@@ -142,7 +149,7 @@ app.post('/auth/device/verify', honeypotLogger, async (req, res) => {
     activeChallenges.delete(deviceChallengeId); // one-time use: consume regardless of outcome
 
     if (!deviceValid) {
-      activateHoneypot(req.ip, 'Invalid device signature');
+      activateHoneypot(getClientIp(req), 'Invalid device signature');
       return res.status(401).json({ error: 'Device verification failed' });
     }
 
@@ -171,7 +178,7 @@ app.post('/auth/device/verify', honeypotLogger, async (req, res) => {
 const requireAuth = (req, res, next) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) {
-    activateHoneypot(req.ip, 'Missing authorization token');
+    activateHoneypot(getClientIp(req), 'Missing authorization token');
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -180,7 +187,7 @@ const requireAuth = (req, res, next) => {
     req.deviceId = decoded.deviceId;
     next();
   } catch (error) {
-    activateHoneypot(req.ip, 'Invalid token');
+    activateHoneypot(getClientIp(req), 'Invalid token');
     res.status(401).json({ error: 'Invalid token' });
   }
 };
@@ -200,14 +207,14 @@ app.get('/api/profile', requireAuth, (req, res) => {
 app.get('/git/auth', (req, res) => {
   const creds = parseBasicAuth(req);
   if (!creds) {
-    activateHoneypot(req.ip, 'Git auth missing credentials');
+    activateHoneypot(getClientIp(req), 'Git auth missing credentials');
     res.set('WWW-Authenticate', 'Basic realm="physicalkey-git"');
     return res.status(401).json({ granted: false, error: 'Basic auth credentials required' });
   }
 
   const result = validateGitCredentials(creds.username, creds.password);
   if (!result.granted) {
-    activateHoneypot(req.ip, `Git auth failed: ${result.reason}`, { username: creds.username });
+    activateHoneypot(getClientIp(req), `Git auth failed: ${result.reason}`, { username: creds.username });
     return res.status(401).json({ granted: false, error: 'Invalid or expired git credentials' });
   }
 
@@ -224,7 +231,7 @@ app.get('/git/auth', (req, res) => {
 const requireAdmin = (req, res, next) => {
   requireAuth(req, res, () => {
     if (!ADMIN_DEVICE_ID || req.deviceId !== ADMIN_DEVICE_ID) {
-      activateHoneypot(req.ip, 'Forensics access denied: non-admin device', { deviceId: req.deviceId });
+      activateHoneypot(getClientIp(req), 'Forensics access denied: non-admin device', { deviceId: req.deviceId });
       return res.status(403).json({ error: 'Forbidden: admin access required' });
     }
     next();
@@ -237,7 +244,7 @@ app.get('/admin/forensics', requireAdmin, (req, res) => {
 
 // Honeypot decoy endpoint
 app.get('/api/honeypot/fake-database', (req, res) => {
-  const entry = activateHoneypot(req.ip, 'Honeypot endpoint accessed', {
+  const entry = activateHoneypot(getClientIp(req), 'Honeypot endpoint accessed', {
     path: req.path,
     userAgent: req.get('user-agent')
   });

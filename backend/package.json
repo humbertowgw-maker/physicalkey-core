@@ -4,6 +4,9 @@
   "description": "PhysicalKey: Phone-as-Key + IoT Device + Private Git Server with Honeypot Protection",
   "main": "server.js",
   "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "scripts": {
     "start": "node server.js"
   },

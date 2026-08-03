@@ -16,6 +16,17 @@ function suspicionLevelFor(attemptCount) {
   return 'low';
 }
 
+// Best-effort real client IP for forensic logging, independent of Express's trust-proxy
+// hop counting (which is deliberately kept small/bounded for rate-limiting safety — see
+// server.js). The leftmost X-Forwarded-For entry is the original client regardless of how
+// many internal hops a platform's routing adds after it. This is only used for readability
+// in the honeypot log, not for any access-control decision.
+export function getClientIp(req) {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  if (forwardedFor) return forwardedFor.split(',')[0].trim();
+  return req.ip;
+}
+
 export function activateHoneypot(ip, reason, details = {}) {
   try {
     const entry = {
@@ -42,7 +53,7 @@ export function honeypotLogger(req, res, next) {
     if (res.statusCode >= 400 || !req.get('authorization')) {
       insertStmt.run(
         crypto.randomUUID(),
-        req.ip,
+        getClientIp(req),
         `${req.method} ${req.path}`,
         JSON.stringify({ statusCode: res.statusCode }),
         'info',
