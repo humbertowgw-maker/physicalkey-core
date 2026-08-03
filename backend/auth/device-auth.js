@@ -1,21 +1,20 @@
 import crypto from 'crypto';
+import db from '../lib/db.js';
 
-const registeredDevices = new Map(); // deviceId -> { publicKey (base64 SPKI DER), registeredAt, lastSeen, accessCount, status }
+const getDeviceStmt = db.prepare('SELECT * FROM identities WHERE device_id = ? AND kind = ?');
+const insertDeviceStmt = db.prepare(`
+  INSERT INTO identities (device_id, kind, public_key, registered_at, last_seen, access_count, status)
+  VALUES (?, 'device', ?, ?, ?, 0, 'active')
+`);
+const touchDeviceStmt = db.prepare('UPDATE identities SET last_seen = ?, access_count = access_count + 1 WHERE device_id = ? AND kind = ?');
+const revokeDeviceStmt = db.prepare("UPDATE identities SET status = 'revoked' WHERE device_id = ? AND kind = ?");
 
 export function registerDevice(deviceId, publicKeyB64) {
   try {
-    const registration = {
-      deviceId,
-      publicKey: publicKeyB64,
-      registeredAt: Date.now(),
-      lastSeen: Date.now(),
-      accessCount: 0,
-      status: 'active'
-    };
-
-    registeredDevices.set(deviceId, registration);
+    const now = Date.now();
+    insertDeviceStmt.run(deviceId, publicKeyB64, now, now);
     console.log(`✓ Device registered: ${deviceId}`);
-    return registration;
+    return getDeviceStmt.get(deviceId, 'device');
   } catch (error) {
     console.error('Device registration error:', error);
     return null;
@@ -26,9 +25,11 @@ export async function validateDeviceSignature(challenge, deviceSignatureB64, dev
   try {
     console.log(`🔑 Validating device signature for: ${deviceId}`);
 
-    let device = registeredDevices.get(deviceId);
+    let device = getDeviceStmt.get(deviceId, 'device');
     if (!device) {
       // Trust-on-first-use: an unknown device must supply its public key to register.
+      // Once registered, this is persisted — a restart cannot be used to re-register
+      // (hijack) a deviceId that already has a trusted key on file.
       if (!publicKeyB64) {
         console.error(`Unknown device ${deviceId} did not supply a publicKey for registration`);
         return false;
@@ -47,7 +48,7 @@ export async function validateDeviceSignature(challenge, deviceSignatureB64, dev
     }
 
     const publicKeyObj = crypto.createPublicKey({
-      key: Buffer.from(device.publicKey, 'base64'),
+      key: Buffer.from(device.public_key, 'base64'),
       format: 'der',
       type: 'spki'
     });
@@ -64,8 +65,7 @@ export async function validateDeviceSignature(challenge, deviceSignatureB64, dev
       return false;
     }
 
-    device.lastSeen = Date.now();
-    device.accessCount++;
+    touchDeviceStmt.run(Date.now(), deviceId, 'device');
 
     console.log(`✓ Device signature cryptographically verified: ${deviceId}`);
     return true;
@@ -76,20 +76,19 @@ export async function validateDeviceSignature(challenge, deviceSignatureB64, dev
 }
 
 export function getDeviceInfo(deviceId) {
-  const device = registeredDevices.get(deviceId);
+  const device = getDeviceStmt.get(deviceId, 'device');
   if (!device) return null;
 
   return {
-    deviceId: device.deviceId,
-    registeredAt: device.registeredAt,
-    lastSeen: device.lastSeen,
-    accessCount: device.accessCount,
+    deviceId: device.device_id,
+    registeredAt: device.registered_at,
+    lastSeen: device.last_seen,
+    accessCount: device.access_count,
     status: device.status
   };
 }
 
 export function revokeDevice(deviceId) {
-  const device = registeredDevices.get(deviceId);
-  if (device) device.status = 'revoked';
-  return device;
+  revokeDeviceStmt.run(deviceId, 'device');
+  return getDeviceStmt.get(deviceId, 'device');
 }

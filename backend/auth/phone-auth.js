@@ -1,18 +1,25 @@
 import crypto from 'crypto';
+import db from '../lib/db.js';
 
 // NOTE: This is real Ed25519 public-key challenge-response, not Apple App Attest /
 // Google Play Integrity. Those require an actual mobile app and calls to Apple/Google's
 // attestation servers, which isn't something a backend alone can verify. This gives
 // genuine cryptographic proof of possession of a private key tied to a deviceId,
-// using trust-on-first-use (TOFU) registration of the public key.
+// using trust-on-first-use (TOFU) registration of the public key. Registrations are
+// persisted to SQLite so a server restart can't be used to re-register (hijack) a
+// deviceId that already has a trusted key on file.
 
-const registeredPhones = new Map(); // deviceId -> { publicKey (base64 SPKI DER), platform, registeredAt }
+const getPhoneStmt = db.prepare('SELECT * FROM identities WHERE device_id = ? AND kind = ?');
+const insertPhoneStmt = db.prepare(`
+  INSERT INTO identities (device_id, kind, public_key, platform, registered_at, last_seen, access_count, status)
+  VALUES (?, 'phone', ?, ?, ?, ?, 0, 'active')
+`);
 
 function registerPhone(deviceId, publicKeyB64, platform) {
-  const registration = { deviceId, publicKey: publicKeyB64, platform, registeredAt: Date.now() };
-  registeredPhones.set(deviceId, registration);
+  const now = Date.now();
+  insertPhoneStmt.run(deviceId, publicKeyB64, platform, now, now);
   console.log(`✓ Phone identity registered: ${deviceId} (${platform})`);
-  return registration;
+  return getPhoneStmt.get(deviceId, 'phone');
 }
 
 export async function validatePhoneAttestation(attestationObject, phoneSignatureB64, challenge) {
@@ -28,7 +35,7 @@ export async function validatePhoneAttestation(attestationObject, phoneSignature
       return false;
     }
 
-    let phone = registeredPhones.get(deviceId);
+    let phone = getPhoneStmt.get(deviceId, 'phone');
     if (!phone) {
       if (!publicKey) {
         console.error(`Unknown phone ${deviceId} did not supply a publicKey for registration`);
@@ -43,7 +50,7 @@ export async function validatePhoneAttestation(attestationObject, phoneSignature
     }
 
     const publicKeyObj = crypto.createPublicKey({
-      key: Buffer.from(phone.publicKey, 'base64'),
+      key: Buffer.from(phone.public_key, 'base64'),
       format: 'der',
       type: 'spki'
     });

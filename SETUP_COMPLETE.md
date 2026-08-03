@@ -9,6 +9,22 @@
 
 **One code fix required:** `package.json` originally pinned `jsonwebtoken@^9.1.0`, which doesn't exist on npm (latest is `9.0.2`). Changed to `^9.0.2` so `npm install` would succeed.
 
+## Persistence (2026-08-03 21:37 UTC)
+All state now survives a server restart, backed by `node:sqlite` (built into Node 22+/26 — **zero new npm dependencies**). Database file: `backend/data/physicalkey.db` (gitignored, local runtime data, not source).
+
+- **What's persisted**: registered phone/device identities (public keys + status), git credentials (hashed, see below), honeypot events (used to derive both the summary and attacker profiles — no separate table to drift out of sync).
+- **What's still in-memory**: `activeChallenges` (the short-lived, 2-minute phone/device auth challenges in `server.js`). Deliberate — losing an in-flight challenge on restart just means the client re-requests one; no reason to persist something that expires in 2 minutes anyway.
+- **Why this actually matters, not just as a formality**: before this, restarting the server silently wiped every registered device's public key. That meant an attacker who could trigger a restart (crash, deploy, etc.) could re-register an already-trusted `deviceId` under a *new* key — full impersonation via restart. Persisting registrations closes that. Verified directly: after a real process kill + restart, re-authenticating a previously-registered device with its original key succeeds, and attempting to hijack that same `deviceId` with a *different* key is correctly rejected.
+- **Git password hashing added**: moving credentials from RAM to a file on disk changes the risk profile, so git passwords are no longer stored in plaintext — salted `scrypt` hash (`crypto.scryptSync` + `crypto.timingSafeEqual`, both built into `node:crypto`, no new dependency) with the plaintext returned to the caller only once, at issuance.
+
+**Verified live** via `node scripts/test-persistence.js register`, then a real `kill -9` of the server process (not just an in-process reset) followed by `npm start`, then `node scripts/test-persistence.js verify`:
+- Git credentials issued before the restart still validate against `/git/auth` afterward
+- Re-authenticating the same `deviceId` with its original persisted key → succeeds
+- Attempting to hijack that `deviceId` with a freshly generated, different key → 401 rejected
+- Honeypot events logged before the restart are still visible in `/admin/forensics` afterward
+
+New script: `scripts/test-persistence.js` (two-phase: `register` before restart, `verify` after). Also fixed both existing test scripts (`test-crypto-flow.js`'s admin path was unaffected; `test-git-forensics.js` needed a fix) to be idempotent against a persistent database — previously they unconditionally regenerated the admin device's keypair on every run, which is harmless against an in-memory store that resets anyway but breaks against a real database (the new key on disk no longer matches the one already bound in storage, which is correctly rejected). Confirmed `test-git-forensics.js` now passes when run twice in a row without a database reset in between.
+
 ## Cryptographic Auth Upgrade (2026-08-03 11:40 UTC)
 Phone and device signature verification is now **real Ed25519 public-key challenge-response**, not string-presence checking.
 

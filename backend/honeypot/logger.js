@@ -1,5 +1,14 @@
-const honeypotLog = [];
-const attackerProfiles = new Map();
+import crypto from 'crypto';
+import db from '../lib/db.js';
+
+const insertStmt = db.prepare('INSERT INTO honeypot_events (id, ip, reason, details, level, timestamp) VALUES (?, ?, ?, ?, ?, ?)');
+const recentStmt = db.prepare('SELECT * FROM honeypot_events ORDER BY rowid DESC LIMIT ?');
+const summaryStmt = db.prepare('SELECT COUNT(*) as totalAttempts, COUNT(DISTINCT ip) as uniqueIPs FROM honeypot_events');
+const attackersStmt = db.prepare(`
+  SELECT ip, MIN(timestamp) as firstSeen, MAX(timestamp) as lastSeen, COUNT(*) as totalAttempts
+  FROM honeypot_events GROUP BY ip
+`);
+const techniquesForIpStmt = db.prepare('SELECT DISTINCT reason FROM honeypot_events WHERE ip = ?');
 
 function suspicionLevelFor(attemptCount) {
   if (attemptCount >= 7) return 'high';
@@ -9,8 +18,8 @@ function suspicionLevelFor(attemptCount) {
 
 export function activateHoneypot(ip, reason, details = {}) {
   try {
-    const logEntry = {
-      id: Math.random().toString(36).substring(7),
+    const entry = {
+      id: crypto.randomUUID(),
       ip,
       reason,
       details,
@@ -18,27 +27,10 @@ export function activateHoneypot(ip, reason, details = {}) {
       level: 'warning'
     };
 
-    honeypotLog.push(logEntry);
+    insertStmt.run(entry.id, entry.ip, entry.reason, JSON.stringify(entry.details), entry.level, entry.timestamp);
     console.log(`🎭 HONEYPOT ACTIVATED: ${reason} from IP: ${ip}`);
 
-    if (!attackerProfiles.has(ip)) {
-      attackerProfiles.set(ip, {
-        ip,
-        firstSeen: Date.now(),
-        lastSeen: Date.now(),
-        attempts: [],
-        techniques: new Set(),
-        suspicionLevel: 'low'
-      });
-    }
-
-    const profile = attackerProfiles.get(ip);
-    profile.lastSeen = Date.now();
-    profile.attempts.push({ reason, timestamp: Date.now() });
-    profile.techniques.add(reason);
-    profile.suspicionLevel = suspicionLevelFor(profile.attempts.length);
-
-    return logEntry;
+    return entry;
   } catch (error) {
     console.error('Honeypot activation error:', error);
   }
@@ -48,13 +40,14 @@ export function honeypotLogger(req, res, next) {
   const originalSend = res.send;
   res.send = function(data) {
     if (res.statusCode >= 400 || !req.get('authorization')) {
-      honeypotLog.push({
-        method: req.method,
-        path: req.path,
-        ip: req.ip,
-        statusCode: res.statusCode,
-        timestamp: new Date().toISOString()
-      });
+      insertStmt.run(
+        crypto.randomUUID(),
+        req.ip,
+        `${req.method} ${req.path}`,
+        JSON.stringify({ statusCode: res.statusCode }),
+        'info',
+        new Date().toISOString()
+      );
     }
     return originalSend.call(this, data);
   };
@@ -62,26 +55,32 @@ export function honeypotLogger(req, res, next) {
 }
 
 export function getHoneypotSummary() {
+  const row = summaryStmt.get();
   return {
-    totalAttempts: honeypotLog.length,
-    uniqueIPs: new Set(honeypotLog.map(log => log.ip)).size,
+    totalAttempts: row.totalAttempts,
+    uniqueIPs: row.uniqueIPs,
     timestamp: new Date().toISOString()
   };
 }
 
 export function getForensicsReport() {
-  return {
-    summary: getHoneypotSummary(),
-    events: honeypotLog.slice(-200),
-    attackers: Array.from(attackerProfiles.values()).map(profile => ({
-      ip: profile.ip,
-      firstSeen: new Date(profile.firstSeen).toISOString(),
-      lastSeen: new Date(profile.lastSeen).toISOString(),
-      totalAttempts: profile.attempts.length,
-      techniques: Array.from(profile.techniques),
-      suspicionLevel: profile.suspicionLevel
-    }))
-  };
-}
+  const events = recentStmt.all(200).reverse().map(row => ({
+    id: row.id,
+    ip: row.ip,
+    reason: row.reason,
+    details: JSON.parse(row.details),
+    level: row.level,
+    timestamp: row.timestamp
+  }));
 
-export { honeypotLog, attackerProfiles };
+  const attackers = attackersStmt.all().map(row => ({
+    ip: row.ip,
+    firstSeen: row.firstSeen,
+    lastSeen: row.lastSeen,
+    totalAttempts: row.totalAttempts,
+    techniques: techniquesForIpStmt.all(row.ip).map(r => r.reason),
+    suspicionLevel: suspicionLevelFor(row.totalAttempts)
+  }));
+
+  return { summary: getHoneypotSummary(), events, attackers };
+}

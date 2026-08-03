@@ -9,6 +9,9 @@ node_modules/
 # Generated test keypairs (private keys must never be committed)
 backend/keys/
 
+# SQLite persistence (device/git/honeypot state — local runtime data, not source)
+backend/data/
+
 # Logs
 *.log
 npm-debug.log*

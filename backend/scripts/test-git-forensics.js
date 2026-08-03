@@ -15,9 +15,21 @@ function sign(name, message) {
   return execFileSync('node', [path.join(__dirname, 'sign.js'), name, message]).toString().trim();
 }
 
-async function fullAuth(phoneId, deviceId, phoneKeyName, deviceKeyName) {
+function keygenIfMissing(name) {
+  const keyPath = path.join(__dirname, '..', 'keys', `${name}.key.pem`);
+  if (!fs.existsSync(keyPath)) keygen(name);
+  return fs.readFileSync(path.join(__dirname, '..', 'keys', `${name}.pub.b64`), 'utf8').trim();
+}
+
+async function fullAuth(phoneId, deviceId, phoneKeyName, deviceKeyName, { reuseDeviceKey = false } = {}) {
   const phonePub = keygen(phoneKeyName);
-  const devicePub = keygen(deviceKeyName);
+
+  // deviceId may be a fixed identity (e.g. the admin device) that's already registered
+  // in the persisted database from an earlier run. Don't regenerate that key (it would no
+  // longer match what's stored server-side); reuse it if present, generate it if not.
+  // The publicKey is always sent regardless — the server only uses it for a device that
+  // isn't registered yet, and ignores it otherwise, so this is safe either way.
+  const devicePub = reuseDeviceKey ? keygenIfMissing(deviceKeyName) : keygen(deviceKeyName);
 
   let res = await fetch(`${BASE}/auth/phone/challenge`, {
     method: 'POST',
@@ -87,7 +99,7 @@ async function main() {
   if (res.status !== 401) throw new Error('/admin/forensics did not require auth');
 
   console.log('\n=== Full auth as the ADMIN device (deviceId = demo-device-admin-001) ===');
-  const admin = await fullAuth(`admin-phone-${suffix}`, 'demo-device-admin-001', 'admin-phone', 'admin-device');
+  const admin = await fullAuth(`admin-phone-${suffix}`, 'demo-device-admin-001', 'admin-phone', 'admin-device', { reuseDeviceKey: true });
   console.log(admin);
 
   console.log('\n=== /admin/forensics as ADMIN device — should be 200 with real data ===');

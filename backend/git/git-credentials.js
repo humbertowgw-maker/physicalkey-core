@@ -1,19 +1,54 @@
 import crypto from 'crypto';
+import db from '../lib/db.js';
 
-const gitTokens = new Map(); // deviceId -> { username, password, scope, repositories, createdAt, expiresAt }
+const upsertStmt = db.prepare(`
+  INSERT INTO git_credentials (device_id, username, password_hash, scope, repositories, created_at, expires_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(device_id) DO UPDATE SET
+    username = excluded.username,
+    password_hash = excluded.password_hash,
+    scope = excluded.scope,
+    repositories = excluded.repositories,
+    created_at = excluded.created_at,
+    expires_at = excluded.expires_at
+`);
+const getStmt = db.prepare('SELECT * FROM git_credentials WHERE device_id = ?');
+const deleteStmt = db.prepare('DELETE FROM git_credentials WHERE device_id = ?');
+
+// Credentials now persist to disk, so the password is stored as a salted scrypt hash
+// rather than plaintext — only the caller who was just issued the password (once,
+// at grant time) ever sees it.
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const [salt, hashHex] = stored.split(':');
+  const candidate = crypto.scryptSync(password, salt, 64);
+  const expected = Buffer.from(hashHex, 'hex');
+  if (candidate.length !== expected.length) return false;
+  return crypto.timingSafeEqual(candidate, expected);
+}
 
 export function grantGitAccess(deviceId, scope = 'read_write') {
-  const credentials = {
-    username: deviceId,
-    password: crypto.randomBytes(18).toString('base64url'),
-    scope,
-    repositories: ['physicalkey-core'],
-    createdAt: Date.now(),
-    expiresAt: Date.now() + (24 * 60 * 60 * 1000)
-  };
-  gitTokens.set(deviceId, credentials);
+  const now = Date.now();
+  const plaintextPassword = crypto.randomBytes(18).toString('base64url');
+  const repositories = ['physicalkey-core'];
+  const expiresAt = now + (24 * 60 * 60 * 1000);
+
+  upsertStmt.run(deviceId, deviceId, hashPassword(plaintextPassword), scope, JSON.stringify(repositories), now, expiresAt);
   console.log(`✓ Git credentials granted: ${deviceId}`);
-  return credentials;
+
+  return {
+    username: deviceId,
+    password: plaintextPassword,
+    scope,
+    repositories,
+    createdAt: now,
+    expiresAt
+  };
 }
 
 export function parseBasicAuth(req) {
@@ -31,18 +66,28 @@ export function parseBasicAuth(req) {
 }
 
 export function validateGitCredentials(username, password) {
-  const record = gitTokens.get(username);
-  if (!record) return { granted: false, reason: 'unknown_username' };
-  if (record.password !== password) return { granted: false, reason: 'invalid_password' };
+  const row = getStmt.get(username);
+  if (!row) return { granted: false, reason: 'unknown_username' };
+  if (!verifyPassword(password, row.password_hash)) return { granted: false, reason: 'invalid_password' };
 
-  if (Date.now() > record.expiresAt) {
-    gitTokens.delete(username);
+  if (Date.now() > row.expires_at) {
+    deleteStmt.run(username);
     return { granted: false, reason: 'expired' };
   }
 
-  return { granted: true, record };
+  return {
+    granted: true,
+    record: {
+      username: row.username,
+      scope: row.scope,
+      repositories: JSON.parse(row.repositories),
+      createdAt: row.created_at,
+      expiresAt: row.expires_at
+    }
+  };
 }
 
 export function revokeGitAccess(deviceId) {
-  return gitTokens.delete(deviceId);
+  const result = deleteStmt.run(deviceId);
+  return result.changes > 0;
 }
