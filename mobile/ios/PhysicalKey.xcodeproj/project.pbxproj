@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0CC9DC77EACC56346C884647 /* DeviceBluetoothManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248EABAD6771BF9B4147E09A /* DeviceBluetoothManager.swift */; };
+		1C5BE17DC6FEFD70D4119ECD /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F44218E4C282A21C70E6BBFD /* Assets.xcassets */; };
 		2998E690B0E88BCF4B5C0ECB /* PhysicalKeyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC605602BE0E09BB723907B6 /* PhysicalKeyApp.swift */; };
 		5FF86FAC6AA623699A6804C7 /* OrganizationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF408DC49EBE7DE23CF1AE54 /* OrganizationViewModel.swift */; };
 		81329ED07C645AB92D440EFC /* PhysicalKeyAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B1FBE00DC6F78B9D2490375 /* PhysicalKeyAPI.swift */; };
@@ -27,6 +28,7 @@
 		98109053DDB9665234E0B9E5 /* PhysicalKey.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PhysicalKey.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BC605602BE0E09BB723907B6 /* PhysicalKeyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicalKeyApp.swift; sourceTree = "<group>"; };
 		EF408DC49EBE7DE23CF1AE54 /* OrganizationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizationViewModel.swift; sourceTree = "<group>"; };
+		F44218E4C282A21C70E6BBFD /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -41,6 +43,7 @@
 		44C5ED0ECFEF9AA1136BA751 /* PhysicalKey */ = {
 			isa = PBXGroup;
 			children = (
+				F44218E4C282A21C70E6BBFD /* Assets.xcassets */,
 				0CA6D4F45E2E62C3E0B324FF /* AuthViewModel.swift */,
 				4F037FF1DDD1650B16ECCDA9 /* ContentView.swift */,
 				248EABAD6771BF9B4147E09A /* DeviceBluetoothManager.swift */,
@@ -69,6 +72,7 @@
 			buildConfigurationList = DB204BC27662829B50388CB9 /* Build configuration list for PBXNativeTarget "PhysicalKey" */;
 			buildPhases = (
 				61C3D0D8FB0F1F83C0555803 /* Sources */,
+				A4B4840BE763F1E9778EBBDC /* Resources */,
 			);
 			buildRules = (
 			);
@@ -114,6 +118,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A4B4840BE763F1E9778EBBDC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1C5BE17DC6FEFD70D4119ECD /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		61C3D0D8FB0F1F83C0555803 /* Sources */ = {
