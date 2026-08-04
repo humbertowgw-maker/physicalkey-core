@@ -1,5 +1,74 @@
 # PhysicalKey Local Backend Setup — Results
 
+## Team accounts (2026-08-04)
+
+The landing page has marketed a "Team" pricing tier ($149) since it was built, but the
+backend only ever had single-device Solo identities — no account grouping, no
+membership, no way to revoke one person's access without touching their device
+directly. This adds the actual data model and API; **deliberately backend-only** —
+no landing page checkout, no payments, no app UI. Those are separate, larger pieces of
+work.
+
+**The model** supports both shapes a team plausibly needs, as the same underlying
+mechanism rather than two separate features:
+- *Everyone has their own key* — each member's physical device gets one `device_access`
+  grant (themselves only). Functionally like a bunch of independent Solo pairs, just
+  grouped under one org for visibility and centralized revocation.
+- *One shared key* (e.g. an office door) — one physical device, multiple `device_access`
+  rows, one per member allowed to use it.
+
+Four new tables in `lib/db.js`: `organizations`, `organization_members` (role:
+owner/admin/member, status: active/revoked), `organization_devices` (a device belongs to
+at most one org), `device_access` (per-member grants on a specific org device — this is
+the table that actually decides who can use what). Owners/admins get implicit access to
+every device in their own org without needing an explicit grant row; plain `member`-role
+phones need one.
+
+**A real authorization layer, not just bookkeeping.** Before this, `/auth/device/verify`
+only checked that the phone and the device were each genuinely who they claimed to be
+(authentication) — nothing stopped ANY successfully-authenticated phone from pairing
+with ANY successfully-authenticated device (BLE physical proximity was the only real
+gate). Now, once a device is claimed by an org, there's a second check: is *this specific
+phone* authorized for *this specific device*? A personal (Solo, non-org) device is
+completely unaffected — this is additive, not a behavior change for existing users.
+
+**Org management works from just a phone, deliberately.** `/auth/phone/verify`'s
+response now also includes a `phoneSessionToken` (1h expiry, `scope: 'phone_session'`)
+— separate from the existing `sessionToken` from `/auth/device/verify` (`scope:
+'full_access'`, needed for git credentials and the org-authorization-gated
+`/api/profile`). Revoking a departing team member's access is exactly the kind of thing
+someone needs to do from their phone alone, without their own physical key device on
+hand — so org endpoints accept the lighter phone-only session, not the full one.
+
+**API** (all except `POST /orgs` require an active membership in `:orgId`; mutations
+require `owner`/`admin` role):
+```
+POST   /orgs                                    { name } -> org (caller becomes owner)
+GET    /orgs/:orgId                              -> org + members + devices
+POST   /orgs/:orgId/members                      { deviceId, role? } -> add/reactivate a member
+DELETE /orgs/:orgId/members/:deviceId            -> revoke (soft) — cannot target the owner
+POST   /orgs/:orgId/devices                      { deviceId } -> claim an already-registered device for this org
+DELETE /orgs/:orgId/devices/:deviceId            -> release it back to unrestricted personal-device behavior
+GET    /orgs/:orgId/devices/:deviceId/access     -> list who's been granted this device
+POST   /orgs/:orgId/devices/:deviceId/access     { memberDeviceId } -> grant
+DELETE /orgs/:orgId/devices/:deviceId/access/:memberDeviceId -> revoke one grant
+```
+
+13 new tests in `test/organizations.test.js` cover both access shapes (exclusive and
+shared), role enforcement (member vs admin vs owner), the owner-can't-self-remove guard,
+revoked-membership overriding a still-present device grant, device removal clearing its
+grants, double-claim rejection, and confirming personal devices stay fully unrestricted.
+All 33 backend tests (20 existing + 13 new) pass, including 3 repeated full runs to rule
+out flakiness in the new server-restart-adjacent test setup.
+
+**One infrastructure fix needed along the way**: the global rate limiter (100
+requests/15min, protects against real abuse) was tripping on the org test file alone,
+since a single test exercising a full org lifecycle (create, add several members, claim
+a device, grant/revoke access, multiple auth flows) easily exceeds 100 requests within
+one server instance's lifetime — nothing to do with what the limit actually protects
+against. Skipped only when `NODE_ENV=test` (set exclusively by `test/helpers.js`);
+production and normal local dev are unaffected.
+
 ## Automated test suite + CI (2026-08-04)
 
 Until now, backend correctness was only ever checked by manually running the scripts in

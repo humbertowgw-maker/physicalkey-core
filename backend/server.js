@@ -11,6 +11,11 @@ import { validateDeviceSignature, registerDevice } from './auth/device-auth.js';
 import { grantGitAccess, parseBasicAuth, validateGitCredentials } from './git/git-credentials.js';
 import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
 import { getIdentity, resetIdentity } from './auth/identity-admin.js';
+import {
+  createOrganization, getOrganization, getMembership, listMembers, addMember, removeMember,
+  getDeviceOrg, listOrgDevices, addDeviceToOrg, removeDeviceFromOrg,
+  listDeviceAccess, grantDeviceAccess, revokeDeviceAccess, isAuthorizedForDevice
+} from './auth/organizations.js';
 
 dotenv.config();
 
@@ -29,7 +34,14 @@ app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
+// Skipped only when NODE_ENV=test — a single test file exercising a full org (create,
+// add several members, claim a device, grant/revoke access, multiple auth flows) easily
+// exceeds this within one server instance's lifetime, which has nothing to do with what
+// the limit is actually protecting against. NODE_ENV=test is set only by the test
+// harness (see test/helpers.js); production and normal dev runs are unaffected.
+if (process.env.NODE_ENV !== 'test') {
+  app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
+}
 
 // Health check
 app.get('/health', (req, res) => {
@@ -124,7 +136,18 @@ app.post('/auth/phone/verify', honeypotLogger, async (req, res) => {
       expiresAt: Date.now() + 120000
     });
 
-    res.json({ status: 'phone_verified', deviceChallengeId, deviceChallenge, expiresIn: 120 });
+    // A lighter session, scoped only to org/team management — deliberately NOT
+    // 'full_access' (no git credentials, no device-authorized session). The point is
+    // that managing your team (adding a member, revoking someone who left) shouldn't
+    // require having your physical key device on hand, since that's a real-world
+    // action people need to take from just their phone.
+    const phoneSessionToken = jwt.sign({
+      phoneDeviceId: stored.phoneAttestation.deviceId,
+      scope: 'phone_session',
+      issuedAt: Date.now()
+    }, SECRET_KEY, { expiresIn: '1h' });
+
+    res.json({ status: 'phone_verified', deviceChallengeId, deviceChallenge, expiresIn: 120, phoneSessionToken });
   } catch (error) {
     console.error('Phone verify error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -152,6 +175,17 @@ app.post('/auth/device/verify', honeypotLogger, async (req, res) => {
     if (!deviceValid) {
       activateHoneypot(getClientIp(req), 'Invalid device signature');
       return res.status(401).json({ error: 'Device verification failed' });
+    }
+
+    // Authentication (the signature checks above) proves this phone and this device are
+    // each who they claim to be. This is a SEPARATE authorization check: is this
+    // specific phone allowed to use this specific device at all? A personal (Solo)
+    // device with no org association is unaffected (matches all prior behavior); an
+    // org-owned device requires active membership, with owners/admins implicitly
+    // authorized for every device in their own org.
+    if (!isAuthorizedForDevice(deviceId, stored.phoneAttestation.deviceId)) {
+      activateHoneypot(getClientIp(req), 'Phone not authorized for this org device', { deviceId, phoneDeviceId: stored.phoneAttestation.deviceId });
+      return res.status(403).json({ error: 'This phone is not authorized to use this device' });
     }
 
     const sessionToken = jwt.sign({
@@ -200,6 +234,137 @@ app.get('/api/profile', requireAuth, (req, res) => {
     access: 'full',
     timestamp: new Date().toISOString()
   });
+});
+
+// --- Organizations (Team accounts) ---
+// Phone-only session (see /auth/phone/verify) — org management doesn't require having
+// a physical key device on hand, since revoking a departing team member's access is
+// exactly the kind of thing someone needs to do from just their phone.
+const requirePhoneSession = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) {
+    activateHoneypot(getClientIp(req), 'Missing authorization token');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const decoded = jwt.verify(token, SECRET_KEY);
+    if (decoded.scope !== 'phone_session') {
+      return res.status(401).json({ error: 'Invalid session for this operation' });
+    }
+    req.phoneDeviceId = decoded.phoneDeviceId;
+    next();
+  } catch (error) {
+    activateHoneypot(getClientIp(req), 'Invalid token');
+    res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+// Any active member (any role) may read org state.
+const requireOrgMember = (req, res, next) => {
+  const membership = getMembership(req.params.orgId, req.phoneDeviceId);
+  if (!membership || membership.status !== 'active') {
+    return res.status(403).json({ error: 'Not a member of this org' });
+  }
+  req.orgMembership = membership;
+  next();
+};
+
+// Only 'owner'/'admin' may manage membership or device access.
+const requireOrgAdmin = (req, res, next) => {
+  const membership = getMembership(req.params.orgId, req.phoneDeviceId);
+  if (!membership || membership.status !== 'active' || !['owner', 'admin'].includes(membership.role)) {
+    activateHoneypot(getClientIp(req), 'Org admin access denied', { orgId: req.params.orgId, phoneDeviceId: req.phoneDeviceId });
+    return res.status(403).json({ error: 'Owner or admin role required' });
+  }
+  req.orgMembership = membership;
+  next();
+};
+
+app.post('/orgs', requirePhoneSession, (req, res) => {
+  const { name } = req.body;
+  if (!name || typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'Org name is required' });
+  }
+  const org = createOrganization(name.trim(), req.phoneDeviceId);
+  res.status(201).json(org);
+});
+
+app.get('/orgs/:orgId', requirePhoneSession, requireOrgMember, (req, res) => {
+  const org = getOrganization(req.params.orgId);
+  if (!org) return res.status(404).json({ error: 'Org not found' });
+  res.json({
+    ...org,
+    members: listMembers(req.params.orgId),
+    devices: listOrgDevices(req.params.orgId)
+  });
+});
+
+app.post('/orgs/:orgId/members', requirePhoneSession, requireOrgAdmin, (req, res) => {
+  const { deviceId, role } = req.body;
+  if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+  if (role && !['admin', 'member'].includes(role)) {
+    return res.status(400).json({ error: "role must be 'admin' or 'member'" });
+  }
+  const member = addMember(req.params.orgId, deviceId, role || 'member');
+  res.status(201).json(member);
+});
+
+app.delete('/orgs/:orgId/members/:deviceId', requirePhoneSession, requireOrgAdmin, (req, res) => {
+  const membership = getMembership(req.params.orgId, req.params.deviceId);
+  if (!membership) return res.status(404).json({ error: 'Not a member of this org' });
+  if (membership.role === 'owner') {
+    return res.status(409).json({ error: 'Cannot remove the org owner — there is no ownership-transfer flow yet' });
+  }
+  const result = removeMember(req.params.orgId, req.params.deviceId);
+  res.json(result);
+});
+
+app.post('/orgs/:orgId/devices', requirePhoneSession, requireOrgAdmin, (req, res) => {
+  const { deviceId } = req.body;
+  if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+  const identity = getIdentity(deviceId);
+  if (!identity || identity.kind !== 'device') {
+    return res.status(404).json({ error: 'No registered key device with that deviceId' });
+  }
+  try {
+    const orgDevice = addDeviceToOrg(req.params.orgId, deviceId);
+    res.status(201).json(orgDevice);
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.delete('/orgs/:orgId/devices/:deviceId', requirePhoneSession, requireOrgAdmin, (req, res) => {
+  const orgDevice = getDeviceOrg(req.params.deviceId);
+  if (!orgDevice || orgDevice.org_id !== req.params.orgId) {
+    return res.status(404).json({ error: 'This device does not belong to this org' });
+  }
+  const result = removeDeviceFromOrg(req.params.deviceId);
+  res.json(result);
+});
+
+app.get('/orgs/:orgId/devices/:deviceId/access', requirePhoneSession, requireOrgMember, (req, res) => {
+  const orgDevice = getDeviceOrg(req.params.deviceId);
+  if (!orgDevice || orgDevice.org_id !== req.params.orgId) {
+    return res.status(404).json({ error: 'This device does not belong to this org' });
+  }
+  res.json(listDeviceAccess(req.params.orgId, req.params.deviceId));
+});
+
+app.post('/orgs/:orgId/devices/:deviceId/access', requirePhoneSession, requireOrgAdmin, (req, res) => {
+  const { memberDeviceId } = req.body;
+  if (!memberDeviceId) return res.status(400).json({ error: 'memberDeviceId is required' });
+  try {
+    grantDeviceAccess(req.params.orgId, req.params.deviceId, memberDeviceId);
+    res.status(201).json({ status: 'granted' });
+  } catch (error) {
+    res.status(409).json({ error: error.message });
+  }
+});
+
+app.delete('/orgs/:orgId/devices/:deviceId/access/:memberDeviceId', requirePhoneSession, requireOrgAdmin, (req, res) => {
+  revokeDeviceAccess(req.params.orgId, req.params.deviceId, req.params.memberDeviceId);
+  res.json({ status: 'revoked' });
 });
 
 // Git access validation — callback endpoint a git server (e.g. Gitea) hits with the

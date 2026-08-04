@@ -44,6 +44,54 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_honeypot_events_ip ON honeypot_events(ip);
+
+  -- Team accounts. An org is owned by a phone identity (deviceId), has members (other
+  -- phone identities), and can claim physical key devices — either exclusively (one
+  -- member's device_access row) or shared (multiple members' rows for the same device).
+  CREATE TABLE IF NOT EXISTS organizations (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_device_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended'))
+  );
+
+  -- A phone identity's membership in an org. 'owner'/'admin' can manage members and
+  -- device access; 'member' can only use devices they've been explicitly granted access
+  -- to. Revoking membership (status='revoked') cuts off ALL of that member's access
+  -- within this org, regardless of any individual device_access grants below.
+  CREATE TABLE IF NOT EXISTS organization_members (
+    org_id TEXT NOT NULL REFERENCES organizations(id),
+    device_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('owner', 'admin', 'member')),
+    added_at INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked')),
+    PRIMARY KEY (org_id, device_id)
+  );
+
+  -- Which org a physical key device belongs to. A device belongs to at most one org; a
+  -- device with no row here is a personal (Solo) device, unaffected by any of this.
+  CREATE TABLE IF NOT EXISTS organization_devices (
+    device_id TEXT PRIMARY KEY,
+    org_id TEXT NOT NULL REFERENCES organizations(id),
+    added_at INTEGER NOT NULL
+  );
+
+  -- Per-member grants for a specific org device. A device used by exactly one member
+  -- (the common "Team" case: everyone has their own key) has exactly one row here; a
+  -- shared device (e.g. one office door) has one row per member who can unlock it.
+  -- Owners/admins get implicit access to every device in their org without needing a
+  -- row here — this table is specifically for 'member'-role grants.
+  CREATE TABLE IF NOT EXISTS device_access (
+    org_id TEXT NOT NULL REFERENCES organizations(id),
+    device_id TEXT NOT NULL,
+    member_device_id TEXT NOT NULL,
+    granted_at INTEGER NOT NULL,
+    PRIMARY KEY (org_id, device_id, member_device_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_org_members_device ON organization_members(device_id);
+  CREATE INDEX IF NOT EXISTS idx_device_access_device ON device_access(org_id, device_id);
 `);
 
 export default db;
