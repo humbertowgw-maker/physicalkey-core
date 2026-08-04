@@ -7,6 +7,7 @@ RUN npm ci --omit=dev
 
 COPY server.js ./
 COPY auth ./auth
+COPY audit ./audit
 COPY git ./git
 COPY honeypot ./honeypot
 COPY access ./access
