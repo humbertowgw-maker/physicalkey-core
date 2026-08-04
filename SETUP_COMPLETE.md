@@ -1,5 +1,18 @@
 # PhysicalKey Local Backend Setup — Results
 
+## Backend security hardening (2026-08-04)
+
+A pass over `server.js` looking for things that were fine for local dev but risky now that it's a real deployment with real phones/devices talking to it. Four fixes, all live in production:
+
+1. **`SECRET_KEY` fail-loud check.** Previously, if `SECRET_KEY` wasn't set, the server silently fell back to a hardcoded `'dev-secret-key'` string — which means anyone could forge a valid JWT (session token, phone session token) just by knowing that string, if the env var was ever accidentally unset in production. Now the server checks `NODE_ENV === 'production'` on boot and calls `process.exit(1)` with a clear error if `SECRET_KEY` is missing, instead of starting up insecurely. Confirmed Railway's `SECRET_KEY` var is set before deploying this.
+2. **Removed CORS middleware entirely.** The `cors` npm package and its `app.use(cors())` were left over from early scaffolding; there's no browser client — only the native iOS app and ESP32 firmware talk to this API — so CORS (a browser-only enforcement mechanism) does nothing useful here and was reflecting every origin by default. Removed the middleware, the import, and the `cors` dependency from `package.json`. (Note: `https://physicalkey-core-production.up.railway.app` still shows an `Access-Control-Allow-Origin: *` header on responses — confirmed via `curl -D -` that this is added by Railway's own edge proxy [`server: railway-hikari`], not by the app. Not something app code controls; harmless since there's no browser client to exploit it.)
+3. **Dedicated auth rate limiting.** The existing general limiter (100 req/15min per IP) covers the whole API. Added a stricter, dedicated limiter (20 req/15min per IP) specifically on `/auth/phone/challenge`, `/auth/phone/verify`, and `/auth/device/verify` — the three endpoints an attacker would actually hit to brute-force or enumerate device/phone identities.
+4. **JWT algorithm pinned.** Both `jwt.sign()` calls now pass `algorithm: 'HS256'` explicitly, and both `jwt.verify()` calls (`requireAuth`, `requirePhoneSession`) now pass `{ algorithms: ['HS256'] }`. Without this, a library/config change down the line could silently widen what algorithms are accepted (including `alg: none`, a classic JWT bypass).
+
+Verified via the full 33-test suite (`npm test`, `NODE_ENV=test` bypasses the new stricter auth limiter so tests aren't rate-limited) before deploying, then confirmed live: `/health` returns 200, general rate-limit headers present (`x-ratelimit-remaining`), server didn't crash-loop on boot (SECRET_KEY check passed).
+
+Commit: `435a28d`.
+
 ## Team accounts (2026-08-04)
 
 The landing page has marketed a "Team" pricing tier ($149) since it was built, but the
