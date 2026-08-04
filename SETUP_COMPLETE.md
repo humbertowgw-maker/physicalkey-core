@@ -1,5 +1,39 @@
 # PhysicalKey Local Backend Setup — Results
 
+## Automated test suite + CI (2026-08-04)
+
+Until now, backend correctness was only ever checked by manually running the scripts in
+`backend/scripts/` against a live server (usually production) and reading the console
+output — no real assertions, no CI, easy to skip, and (as the trust-on-first-use section
+below shows) sometimes accidentally exercised against whatever server happened to be
+running on `localhost:3000`, including a stray leftover dev process from earlier in this
+session.
+
+**`backend/test/`** — a real `node:test` suite (Node's own built-in test runner, zero new
+dependencies, matching how this project already prefers built-ins like `node:sqlite` over
+adding libraries):
+- `helpers.js` — spawns a *real* `node server.js` child process against an isolated,
+  throwaway SQLite directory (`PK_DATA_DIR`, a small additive env-var override in
+  `lib/db.js` — unset in normal dev/production, so a no-op there) on a random port. Never
+  touches the real local dev database or production.
+- `crypto-flow.test.js` — Ed25519 challenge/response, forged-signature rejection, replay
+  rejection, trust-on-first-use hijack rejection.
+- `git-forensics.test.js` — git credential issuance/validation, admin-only access control
+  on `/admin/forensics` (403 non-admin, 401 no token), attacker technique data actually
+  populates (regression check for a real bug fixed earlier this session where a `Set`
+  wasn't serializing).
+- `persistence.test.js` — a **real process kill + restart** against the same on-disk data
+  directory (not an in-memory reset), confirming identities/git-credentials/honeypot
+  events survive and a post-restart hijack attempt is still rejected.
+- `admin-identities.test.js` — the `GET`/`DELETE /admin/identities/:deviceId` endpoints
+  (added the same day, see the section below): full register → inspect → reset → confirm
+  gone → re-register-with-a-different-key cycle, plus unauthenticated-request rejection.
+
+Run locally: `cd backend && npm test` (20 tests, ~0.5s). **CI**:
+`.github/workflows/backend-tests.yml` runs the same command on every push/PR that touches
+`backend/**`, on Node 26 (matching the Dockerfile's `node:26-alpine`, not just the
+`package.json` engines floor).
+
 ## Trust-on-first-use lockouts, and the fix (2026-08-04)
 
 **The bug, as a user hit it:** after re-flashing 3 ESP32 boards to enable flash+NVS

@@ -4,7 +4,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.join(__dirname, '..', 'data');
+// Overridable so the test suite can point at an isolated, throwaway directory instead of
+// the real local/production data — unset in normal running (dev or Railway), so this is
+// a no-op there.
+const dataDir = process.env.PK_DATA_DIR || path.join(__dirname, '..', 'data');
 fs.mkdirSync(dataDir, { recursive: true });
 
 const db = new DatabaseSync(path.join(dataDir, 'physicalkey.db'));
