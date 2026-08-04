@@ -70,41 +70,51 @@
   identity via the Keychain + Face ID + Ed25519 signature instead, which is real
   cryptographic proof-of-possession, just not Apple's specific attestation service.
 
-## Xcode is now installed — what's left needs your Apple ID specifically
+## Running on a real device — done, as of this session
 
-Xcode 26.6 is installed and `PhysicalKey.xcodeproj` builds and runs in the Simulator today.
-Two things remain that genuinely can't be done without your Apple ID sitting in Xcode's own
-account preferences (this isn't a shell command — it's Xcode's GUI, tied to your identity):
+Xcode 26.6 is installed, an Apple ID (`achilleszepeda@icloud.com`) is signed into Xcode's
+accounts, a free Personal Team (`9RYL8ZRC3U`) is set on the target, and the app has been
+**installed and launched on a real, physical iPhone** (`iPhone17,2`) — not the Simulator.
+Confirmed via `xcrun devicectl device info processes` that it stayed running (PID 590) after
+launch, rather than crashing immediately.
 
-1. **Add your Apple ID to Xcode**: Xcode → Settings → Accounts → "+" → sign in.
-2. **Set a Development Team** on the target: open `PhysicalKey.xcodeproj`, select the
-   `PhysicalKey` target → Signing & Capabilities → Team → pick the team tied to your Apple
-   ID (a free "Personal Team" is enough for local device testing; a paid Developer Program
-   membership is only needed for TestFlight/App Store distribution).
+Getting there required three device-side steps, each only doable by hand on the actual
+hardware (none of these are scriptable):
+1. **Developer Mode** enabled on the iPhone (Settings → Privacy & Security → Developer
+   Mode → toggle on → restart → confirm).
+2. **Trust the developer certificate** on first install (Settings → General → VPN & Device
+   Management → tap the Apple ID under "Developer App" → Trust) — iOS blocks any
+   personal-team-signed app from launching until this is done once.
+3. **At least one device registered** with the team — Xcode/`xcodebuild
+   -allowProvisioningUpdates` handles this automatically once the phone is connected via
+   USB and trusts the Mac, but it can't register a device it's never seen.
 
-Once that's done:
+Command that actually built and signed for the real device:
 ```bash
-xcodebuild -project PhysicalKey.xcodeproj -scheme PhysicalKey -destination 'generic/platform=iOS' build
+xcodebuild -project PhysicalKey.xcodeproj -scheme PhysicalKey \
+  -destination 'id=<device-udid-from-xcrun-devicectl-list-devices>' \
+  -allowProvisioningUpdates build
 ```
-should succeed the same way the Simulator build already does (confirmed: `xcodebuild
--destination 'platform=iOS Simulator,name=iPhone 17' build` → **BUILD SUCCEEDED**, and the
-app installs/launches/runs in the Simulator, screenshotted showing the real "No identity on
-this device yet" / "Create Identity" screen — not the placeholder mockup elsewhere on this
-machine).
+— confirmed **BUILD SUCCEEDED**, signed with `Apple Development: achilleszepeda@icloud.com`
+and the auto-generated "iOS Team Provisioning Profile: com.physicalkey.app".
 
-Then: connect a real iPhone via USB, trust the computer on the phone, select it as the run
-destination in Xcode, and hit Run. Face ID and real Bluetooth scanning both require an
-actual device — neither works in the Simulator (Face ID has a "simulate" option under
-Simulator → Features, but that's not the same as testing the real Keychain/biometry path).
+The Simulator build still works too (`xcodebuild -destination 'platform=iOS
+Simulator,name=iPhone 17' build`) and remains useful for quick iteration, but Face ID and
+real Bluetooth scanning only work on actual hardware — neither is meaningfully testable in
+the Simulator.
+
+**What hasn't been verified yet**: tapping through the actual UI on the device — "Create
+Identity" (real Keychain write, biometry-gated) and "Authenticate with Face ID" (real
+biometric prompt + real round-trip to the live backend). That requires an actual face at an
+actual Face ID sensor, which is not something automatable from here — this is the next
+thing to try by hand on the phone itself.
 
 ## Next real steps, in order of what's actually blocking
 
-1. **Add your Apple ID + Development Team in Xcode** (above) — first remaining thing that
-   needs you specifically, not something to automate around.
-2. **Run it on a real iPhone** — first point the Keychain/Face ID code gets tested against
-   real biometric hardware; the Simulator build proves the code runs, not that Face ID
-   itself works correctly.
-3. **Flash the firmware onto a real ESP32 board** (see `../../hardware/README.md`) — the
+1. **Tap through the real flow on the device** — "Create Identity" then "Authenticate with
+   Face ID" — and see what actually happens. First real end-to-end test of the phone half
+   of this system.
+2. **Flash the firmware onto a real ESP32 board** (see `../../hardware/README.md`) — the
    Bluetooth code on this side has nothing to talk to until that exists.
-4. **Pair the two and see what breaks** — GATT discovery, MTU limits, and write/notify
+3. **Pair the two and see what breaks** — GATT discovery, MTU limits, and write/notify
    timing are all unverified assumptions until an actual phone talks to an actual board.
