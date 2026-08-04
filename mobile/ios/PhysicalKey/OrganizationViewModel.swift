@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 
 /// Drives TeamView. The backend (backend/auth/organizations.js) has no "list my orgs"
 /// endpoint — GET /orgs/:orgId requires already knowing the ID — so there's no way for
@@ -11,6 +12,14 @@ final class OrganizationViewModel: ObservableObject {
     @Published private(set) var org: PhysicalKeyAPI.OrgDetail?
     @Published private(set) var isLoading = false
     @Published var errorMessage: String?
+
+    /// Team/member/device IDs are persistent identifiers tied to a specific phone or
+    /// piece of hardware — worth the same shoulder-surf protection as anything else
+    /// identity-related in this app, not shown in plaintext until re-confirmed. Gates
+    /// the whole team screen for the session rather than per-field, matching how the
+    /// rest of the app treats a Face ID confirmation as unlocking access for a while,
+    /// not a one-shot per-item check.
+    @Published private(set) var isRevealed = false
 
     /// This device's role in `org`, if it's a member at all — drives which actions the
     /// UI offers (only owner/admin can manage membership or device access).
@@ -34,6 +43,28 @@ final class OrganizationViewModel: ObservableObject {
     /// authenticatePhone() call) — the one this was initialized with may have expired.
     func updateSessionToken(_ token: String) {
         phoneSessionToken = token
+    }
+
+    /// Prompts Face ID (or passcode fallback) and reveals IDs on success. A fresh
+    /// LAContext each call, independent of KeyManager's Keychain-bound biometric gate —
+    /// this isn't protecting a Keychain item, just gating what's on screen, so it uses
+    /// LocalAuthentication directly rather than routing through a Keychain read.
+    func revealIdentifiers() async {
+        let context = LAContext()
+        do {
+            let success = try await context.evaluatePolicy(
+                .deviceOwnerAuthentication,
+                localizedReason: "Authenticate to view team and device IDs"
+            )
+            if success { isRevealed = true }
+        } catch {
+            // User cancelled or biometrics failed — stay hidden, no error banner needed
+            // for a cancel, that's not a failure worth interrupting them over.
+        }
+    }
+
+    func hideIdentifiers() {
+        isRevealed = false
     }
 
     func loadKnownOrg() async {

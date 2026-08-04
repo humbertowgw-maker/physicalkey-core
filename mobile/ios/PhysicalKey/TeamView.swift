@@ -11,6 +11,16 @@ struct TeamView: View {
             .navigationTitle(viewModel.org?.name ?? "Team")
             .task { await viewModel.loadKnownOrg() }
             .refreshable { await viewModel.refresh() }
+            .onDisappear { viewModel.hideIdentifiers() }
+            .toolbar {
+                if viewModel.org != nil && viewModel.isRevealed {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Hide", systemImage: "lock") {
+                            viewModel.hideIdentifiers()
+                        }
+                    }
+                }
+            }
             .alert("Error", isPresented: Binding(
                 get: { viewModel.errorMessage != nil },
                 set: { if !$0 { viewModel.errorMessage = nil } }
@@ -26,10 +36,42 @@ struct TeamView: View {
         if viewModel.isLoading && viewModel.org == nil {
             ProgressView()
         } else if let org = viewModel.org {
-            OrgDetailView(viewModel: viewModel, org: org)
+            // Team/member/device IDs are persistent identifiers tied to a specific
+            // phone or piece of hardware — hidden by default, same as anything else
+            // identity-related in this app, until re-confirmed with Face ID.
+            if viewModel.isRevealed {
+                OrgDetailView(viewModel: viewModel, org: org)
+            } else {
+                LockedTeamView(viewModel: viewModel, orgName: org.name)
+            }
         } else {
             NoOrgView(viewModel: viewModel)
         }
+    }
+}
+
+private struct LockedTeamView: View {
+    @ObservedObject var viewModel: OrganizationViewModel
+    let orgName: String
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "faceid")
+                .font(.system(size: 48))
+                .foregroundStyle(.secondary)
+            Text("\"\(orgName)\" team details are hidden")
+                .font(.headline)
+            Text("Member and device IDs are persistent identifiers tied to a specific phone or key device — confirm it's you before viewing them.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            Button("View Team Details") {
+                Task { await viewModel.revealIdentifiers() }
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding()
     }
 }
 
