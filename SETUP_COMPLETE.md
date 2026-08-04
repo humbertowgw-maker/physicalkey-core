@@ -1,5 +1,20 @@
 # PhysicalKey Local Backend Setup — Results
 
+## Session lifetime, admin audit log, and a Dockerfile outage (2026-08-04)
+
+Closed out the last two items from the hardening pass above:
+
+- **`sessionToken` lifetime: 24h → 1h.** It's never persisted client-side (in-memory only in `AuthViewModel`, lost on app restart), so shortening it has no real UX cost — it only shrinks the replay window if it's ever exfiltrated. Git access is unaffected; `git/git-credentials.js` has its own independent 24h expiry.
+- **Persistent audit log for admin identity resets.** `DELETE /admin/identities/:deviceId` was only `console.log`'d before — lost on restart, unqueryable. Added an `admin_actions` SQLite table, `backend/audit/log.js`, and `GET /admin/audit-log` (admin-gated) so "who reset this deviceId, and when" has a durable, queryable answer.
+
+**This caused a real (brief) production outage.** `backend/audit/log.js` was added and imported by `server.js`, tests passed locally (34/34), it was committed, pushed, and deployed — and the deployed container immediately crash-looped with `ERR_MODULE_NOT_FOUND: /app/audit/log.js`. Root cause: `Dockerfile` copies source directories by explicit name (`COPY auth ./auth`, `COPY git ./git`, etc.) rather than the whole build context, and the new `audit/` directory was never added to that list. `npm test` never catches this class of bug because it runs `server.js` directly via `node`, not through the Docker image — so a Dockerfile that's silently out of sync with the source tree looks completely fine right up until it's deployed.
+
+Fixed in two parts:
+1. Added `COPY audit ./audit` to the Dockerfile and redeployed — confirmed via `railway logs` (clean boot, no crash) and a live 401 (not 502) from `/admin/audit-log`.
+2. Added a second CI job (`docker-build` in `.github/workflows/backend-tests.yml`) that actually builds `./backend`'s Docker image and boots a real container, failing the build if `/health` doesn't respond within 20s. This is the durable fix — it makes this exact class of bug (Dockerfile drift from the real source tree) fail in CI instead of in production. Verified: both `test` and `docker-build` jobs pass on the run that includes this fix.
+
+Commits: `264b486` (session lifetime + audit log), `8d4e75f` (Dockerfile fix), `e3bfbff` (CI docker-build job).
+
 ## Backend security hardening (2026-08-04)
 
 A pass over `server.js` looking for things that were fine for local dev but risky now that it's a real deployment with real phones/devices talking to it. Four fixes, all live in production:
