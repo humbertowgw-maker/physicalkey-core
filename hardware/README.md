@@ -110,6 +110,13 @@ Practical fallout of enabling this:
   auth required). See `SETUP_COMPLETE.md`'s "Trust-on-first-use lockouts" section for
   the full story and exact usage. Same applies to a phone if its Keychain identity ever
   gets recreated.
+- **Any phone that had already Bluetooth-paired with a board before the erase needs a
+  one-time manual re-pair**, same underlying reason as the backend registration above:
+  the erase wipes the board's BLE bond storage (its identity/IRK), so the phone's saved
+  pairing key no longer matches. Symptom: pairs, but then fails/needs to be forgotten
+  and re-paired once (iOS: Settings → Bluetooth → the device's (i) button → "Forget This
+  Device"). One-time only — after that re-pair, reconnecting works normally, no
+  recurring issue.
 - Development Mode was chosen over Release Mode deliberately: Release Mode additionally
   and permanently disables USB/serial reflashing, which would brick the update path for
   this actively-developed project with no OTA system built yet.
