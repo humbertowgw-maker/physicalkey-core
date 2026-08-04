@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import express from 'express';
-import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { v4 as uuid } from 'uuid';
@@ -20,6 +19,18 @@ import {
 dotenv.config();
 
 const app = express();
+
+// If SECRET_KEY is ever unset in production (a botched deploy, a cleared env var), the
+// old behavior silently fell back to a hardcoded placeholder string — every session
+// token in the system would become forgeable by anyone who's ever read this file.
+// Refusing to start is the correct failure mode: a loud, immediate crash beats a silent
+// security downgrade. The fallback is kept for local dev/test convenience, where
+// NODE_ENV is never 'production' (unset for `npm start`, 'test' for the test suite —
+// see test/helpers.js; only the Dockerfile sets NODE_ENV=production).
+if (!process.env.SECRET_KEY && process.env.NODE_ENV === 'production') {
+  console.error('FATAL: SECRET_KEY environment variable must be set in production.');
+  process.exit(1);
+}
 const SECRET_KEY = process.env.SECRET_KEY || 'dev-secret-key';
 const ADMIN_DEVICE_ID = process.env.ADMIN_DEVICE_ID;
 const activeChallenges = new Map();
@@ -32,7 +43,12 @@ const activeChallenges = new Map();
 app.set('trust proxy', 1);
 
 app.use(helmet());
-app.use(cors());
+// No CORS middleware: every real client here is a native iOS app or ESP32 firmware,
+// neither of which is subject to (or benefits from) CORS — it's a browser-only
+// enforcement mechanism. `cors()` previously reflected every origin by default, which
+// was pure unnecessary exposure with no actual client that needed it. If a browser-based
+// admin panel or web client is ever added, reintroduce it scoped to that origin
+// specifically, not wide open.
 app.use(express.json({ limit: '10mb' }));
 // Skipped only when NODE_ENV=test — a single test file exercising a full org (create,
 // add several members, claim a device, grant/revoke access, multiple auth flows) easily
@@ -42,6 +58,19 @@ app.use(express.json({ limit: '10mb' }));
 if (process.env.NODE_ENV !== 'test') {
   app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 }
+
+// A tighter limit specifically on the auth handshake endpoints, on top of the general
+// one above. Trust-on-first-use means whoever registers a deviceId first (with a valid
+// signature over the challenge) owns it permanently — there's no separate secret gating
+// that first registration beyond knowing the deviceId string itself. A legitimate client
+// calls these a handful of times per session; this doesn't touch that, but it meaningfully
+// raises the cost of automated guessing/racing against not-yet-registered deviceIds from
+// a single source. Doesn't eliminate the risk (a patient, distributed attacker isn't
+// slowed by a per-IP limit) — a full fix would need a different bootstrapping mechanism
+// for first registration, which is a bigger architectural change than this pass covers.
+const authRateLimit = process.env.NODE_ENV === 'test'
+  ? (req, res, next) => next()
+  : rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
 
 // Health check
 app.get('/health', (req, res) => {
@@ -76,7 +105,7 @@ app.get('/auth/requirements', (req, res) => {
 });
 
 // Phone challenge
-app.post('/auth/phone/challenge', honeypotLogger, (req, res) => {
+app.post('/auth/phone/challenge', authRateLimit, honeypotLogger, (req, res) => {
   try {
     const { phoneAttestation } = req.body;
     if (!phoneAttestation) {
@@ -102,7 +131,7 @@ app.post('/auth/phone/challenge', honeypotLogger, (req, res) => {
 });
 
 // Phone verify
-app.post('/auth/phone/verify', honeypotLogger, async (req, res) => {
+app.post('/auth/phone/verify', authRateLimit, honeypotLogger, async (req, res) => {
   try {
     const { challengeId, phoneSignature } = req.body;
     const stored = activeChallenges.get(challengeId);
@@ -145,7 +174,7 @@ app.post('/auth/phone/verify', honeypotLogger, async (req, res) => {
       phoneDeviceId: stored.phoneAttestation.deviceId,
       scope: 'phone_session',
       issuedAt: Date.now()
-    }, SECRET_KEY, { expiresIn: '1h' });
+    }, SECRET_KEY, { algorithm: 'HS256', expiresIn: '1h' });
 
     res.json({ status: 'phone_verified', deviceChallengeId, deviceChallenge, expiresIn: 120, phoneSessionToken });
   } catch (error) {
@@ -155,7 +184,7 @@ app.post('/auth/phone/verify', honeypotLogger, async (req, res) => {
 });
 
 // Device verify
-app.post('/auth/device/verify', honeypotLogger, async (req, res) => {
+app.post('/auth/device/verify', authRateLimit, honeypotLogger, async (req, res) => {
   try {
     const { deviceChallengeId, deviceSignature, deviceId, publicKey } = req.body;
     const stored = activeChallenges.get(deviceChallengeId);
@@ -193,7 +222,7 @@ app.post('/auth/device/verify', honeypotLogger, async (req, res) => {
       phoneAttestation: stored.phoneAttestation,
       scope: 'full_access',
       issuedAt: Date.now()
-    }, SECRET_KEY, { expiresIn: '24h' });
+    }, SECRET_KEY, { algorithm: 'HS256', expiresIn: '24h' });
 
     const gitCredentials = grantGitAccess(deviceId);
 
@@ -218,7 +247,7 @@ const requireAuth = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, SECRET_KEY);
+    const decoded = jwt.verify(token, SECRET_KEY, { algorithms: ['HS256'] });
     req.deviceId = decoded.deviceId;
     next();
   } catch (error) {
@@ -247,7 +276,7 @@ const requirePhoneSession = (req, res, next) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   try {
-    const decoded = jwt.verify(token, SECRET_KEY);
+    const decoded = jwt.verify(token, SECRET_KEY, { algorithms: ['HS256'] });
     if (decoded.scope !== 'phone_session') {
       return res.status(401).json({ error: 'Invalid session for this operation' });
     }
