@@ -10,6 +10,7 @@ import { validateDeviceSignature, registerDevice } from './auth/device-auth.js';
 import { grantGitAccess, parseBasicAuth, validateGitCredentials } from './git/git-credentials.js';
 import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
 import { getIdentity, resetIdentity } from './auth/identity-admin.js';
+import { logAdminAction, getAdminActionLog } from './audit/log.js';
 import {
   createOrganization, getOrganization, getMembership, listMembers, addMember, removeMember,
   getDeviceOrg, listOrgDevices, addDeviceToOrg, removeDeviceFromOrg,
@@ -217,12 +218,18 @@ app.post('/auth/device/verify', authRateLimit, honeypotLogger, async (req, res) 
       return res.status(403).json({ error: 'This phone is not authorized to use this device' });
     }
 
+    // Short-lived deliberately: this token isn't persisted client-side (AuthViewModel
+    // keeps it only in memory, lost on app restart), and it's what gates the admin
+    // endpoints (/admin/forensics, /admin/identities) for the admin device — so there's
+    // no UX cost to a tight expiry, only a smaller replay window if it's ever exfiltrated.
+    // Git access has its own independent 24h expiry (git/git-credentials.js) unaffected
+    // by this.
     const sessionToken = jwt.sign({
       deviceId,
       phoneAttestation: stored.phoneAttestation,
       scope: 'full_access',
       issuedAt: Date.now()
-    }, SECRET_KEY, { algorithm: 'HS256', expiresIn: '24h' });
+    }, SECRET_KEY, { algorithm: 'HS256', expiresIn: '1h' });
 
     const gitCredentials = grantGitAccess(deviceId);
 
@@ -461,7 +468,14 @@ app.delete('/admin/identities/:deviceId', requireAdmin, (req, res) => {
     return res.status(404).json({ error: 'No identity registered for this deviceId' });
   }
   console.log(`⚠ Admin reset identity: ${req.params.deviceId} (was kind=${removed.kind}, registered_at=${removed.registered_at})`);
+  logAdminAction(req.deviceId, 'identity_reset', req.params.deviceId, { kind: removed.kind, registeredAt: removed.registered_at });
   res.json({ status: 'reset', deviceId: req.params.deviceId, previousKind: removed.kind });
+});
+
+// Durable log of admin actions (currently: identity resets) — who did what, to which
+// deviceId, and when. Read-only; entries are written by the actions themselves.
+app.get('/admin/audit-log', requireAdmin, (req, res) => {
+  res.json({ entries: getAdminActionLog() });
 });
 
 // Honeypot decoy endpoint

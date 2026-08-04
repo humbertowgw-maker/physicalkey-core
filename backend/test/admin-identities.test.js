@@ -75,3 +75,27 @@ test('DELETE /admin/identities/:deviceId 404s for an unregistered deviceId', asy
   });
   assert.equal(res.status, 404);
 });
+
+test('GET /admin/audit-log rejects non-admin requests and records identity resets', async () => {
+  let res = await fetch(`${server.baseUrl}/admin/audit-log`);
+  assert.equal(res.status, 401);
+
+  const targetDeviceId = 'audit-log-target';
+  await fullAuth(server.baseUrl, 'audit-target-phone', keypair(), targetDeviceId, keypair());
+
+  res = await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert.equal(res.status, 200);
+
+  res = await fetch(`${server.baseUrl}/admin/audit-log`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  const entry = body.entries.find(e => e.targetDeviceId === targetDeviceId);
+  assert.ok(entry, 'the reset should have been recorded in the audit log');
+  assert.equal(entry.action, 'identity_reset');
+  assert.equal(entry.adminDeviceId, server.adminDeviceId);
+});

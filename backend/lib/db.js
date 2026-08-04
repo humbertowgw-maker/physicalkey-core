@@ -92,6 +92,21 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_org_members_device ON organization_members(device_id);
   CREATE INDEX IF NOT EXISTS idx_device_access_device ON device_access(org_id, device_id);
+
+  -- Durable record of sensitive admin actions (currently: identity resets via
+  -- auth/identity-admin.js). Previously only console.log'd, which is lost on restart and
+  -- unqueryable — this survives both, so "who reset this deviceId, and when" is always
+  -- answerable later.
+  CREATE TABLE IF NOT EXISTS admin_actions (
+    id TEXT PRIMARY KEY,
+    admin_device_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target_device_id TEXT,
+    details TEXT NOT NULL DEFAULT '{}',
+    timestamp TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_admin_actions_timestamp ON admin_actions(timestamp);
 `);
 
 export default db;
