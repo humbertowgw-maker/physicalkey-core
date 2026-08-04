@@ -1,5 +1,9 @@
 import Foundation
-import CoreBluetooth
+// CoreBluetooth's types (CBPeripheral, CBCharacteristic, etc.) aren't yet audited/annotated
+// Sendable by Apple. @preconcurrency is the sanctioned bridge for using Swift 6 strict
+// concurrency checking in your own code against a system framework that hasn't caught up
+// yet — not a workaround, the documented mechanism for exactly this situation.
+@preconcurrency import CoreBluetooth
 
 /// Speaks the GATT protocol defined by hardware/firmware/PhysicalKeyDevice/PhysicalKeyDevice.ino.
 /// UUIDs below must stay byte-for-byte identical to the firmware's #define block — there's
@@ -13,6 +17,10 @@ import CoreBluetooth
 /// was proven compatible with the backend independently, in both mobile/ios-crypto-poc and
 /// hardware/firmware-crypto-poc — what's unverified is specifically the Bluetooth transport
 /// connecting them, not the cryptography.
+// CBCentralManager is initialized below with `queue: nil`, which per Apple's docs means
+// all delegate callbacks land on the main queue — @MainActor here declares what's already
+// true at runtime, not an isolation choice made for the compiler's benefit.
+@MainActor
 final class DeviceBluetoothManager: NSObject, ObservableObject {
     enum ConnectionError: Error {
         case bluetoothUnavailable
@@ -23,11 +31,14 @@ final class DeviceBluetoothManager: NSObject, ObservableObject {
         case peripheralDisconnected
     }
 
-    private static let serviceUUID = CBUUID(string: "b16a3c00-2c1e-4a7a-9b7a-0a1c2d3e4f50")
-    private static let publicKeyCharUUID = CBUUID(string: "b16a3c01-2c1e-4a7a-9b7a-0a1c2d3e4f50")
-    private static let deviceIdCharUUID = CBUUID(string: "b16a3c02-2c1e-4a7a-9b7a-0a1c2d3e4f50")
-    private static let challengeCharUUID = CBUUID(string: "b16a3c03-2c1e-4a7a-9b7a-0a1c2d3e4f50")
-    private static let signatureCharUUID = CBUUID(string: "b16a3c04-2c1e-4a7a-9b7a-0a1c2d3e4f50")
+    // CBUUID isn't marked Sendable upstream, but these are immutable constants fixed at
+    // declaration and never mutated — safe by construction, hence nonisolated(unsafe)
+    // rather than actually restructuring around actor isolation for values that never change.
+    nonisolated(unsafe) private static let serviceUUID = CBUUID(string: "b16a3c00-2c1e-4a7a-9b7a-0a1c2d3e4f50")
+    nonisolated(unsafe) private static let publicKeyCharUUID = CBUUID(string: "b16a3c01-2c1e-4a7a-9b7a-0a1c2d3e4f50")
+    nonisolated(unsafe) private static let deviceIdCharUUID = CBUUID(string: "b16a3c02-2c1e-4a7a-9b7a-0a1c2d3e4f50")
+    nonisolated(unsafe) private static let challengeCharUUID = CBUUID(string: "b16a3c03-2c1e-4a7a-9b7a-0a1c2d3e4f50")
+    nonisolated(unsafe) private static let signatureCharUUID = CBUUID(string: "b16a3c04-2c1e-4a7a-9b7a-0a1c2d3e4f50")
 
     struct DeviceIdentity {
         let deviceId: String
@@ -103,119 +114,142 @@ final class DeviceBluetoothManager: NSObject, ObservableObject {
     }
 }
 
+// CBCentralManagerDelegate/CBPeripheralDelegate are plain (non-actor-isolated) protocols,
+// so conforming with @MainActor-isolated methods doesn't typecheck even though we know
+// these callbacks always land on the main queue at runtime (CBCentralManager was created
+// with `queue: nil`). Each method below is declared `nonisolated` to satisfy the protocol,
+// then immediately asserts main-actor isolation with MainActor.assumeIsolated — the
+// documented tool for exactly this situation: a synchronous callback whose actual
+// execution context isn't visible to the type system.
 extension DeviceBluetoothManager: CBCentralManagerDelegate {
-    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+    nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         // Nothing to do here proactively — connectToDevice() checks .poweredOn itself
         // before scanning, since a scan call before Bluetooth is ready is a no-op.
     }
 
-    func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
-        central.stopScan()
-        self.peripheral = peripheral
-        peripheral.delegate = self
-        central.connect(peripheral, options: nil)
-    }
-
-    func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        peripheral.discoverServices([Self.serviceUUID])
-    }
-
-    func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-        let pending = connectContinuation
-        connectContinuation = nil
-        pending?.resume(throwing: error ?? ConnectionError.peripheralDisconnected)
-    }
-
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        if let pending = connectContinuation {
-            connectContinuation = nil
-            pending.resume(throwing: error ?? ConnectionError.peripheralDisconnected)
+    nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {
+        MainActor.assumeIsolated {
+            central.stopScan()
+            self.peripheral = peripheral
+            peripheral.delegate = self
+            central.connect(peripheral, options: nil)
         }
-        if let pending = signContinuation {
-            signContinuation = nil
-            pending.resume(throwing: error ?? ConnectionError.peripheralDisconnected)
+    }
+
+    nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        MainActor.assumeIsolated {
+            peripheral.discoverServices([Self.serviceUUID])
+        }
+    }
+
+    nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        MainActor.assumeIsolated {
+            let pending = connectContinuation
+            connectContinuation = nil
+            pending?.resume(throwing: error ?? ConnectionError.peripheralDisconnected)
+        }
+    }
+
+    nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        MainActor.assumeIsolated {
+            if let pending = connectContinuation {
+                connectContinuation = nil
+                pending.resume(throwing: error ?? ConnectionError.peripheralDisconnected)
+            }
+            if let pending = signContinuation {
+                signContinuation = nil
+                pending.resume(throwing: error ?? ConnectionError.peripheralDisconnected)
+            }
         }
     }
 }
 
 extension DeviceBluetoothManager: CBPeripheralDelegate {
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
-            let pending = connectContinuation
-            connectContinuation = nil
-            pending?.resume(throwing: error ?? ConnectionError.serviceNotFound)
-            return
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        MainActor.assumeIsolated {
+            guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
+                let pending = connectContinuation
+                connectContinuation = nil
+                pending?.resume(throwing: error ?? ConnectionError.serviceNotFound)
+                return
+            }
+            peripheral.discoverCharacteristics(
+                [Self.publicKeyCharUUID, Self.deviceIdCharUUID, Self.challengeCharUUID, Self.signatureCharUUID],
+                for: service
+            )
         }
-        peripheral.discoverCharacteristics(
-            [Self.publicKeyCharUUID, Self.deviceIdCharUUID, Self.challengeCharUUID, Self.signatureCharUUID],
-            for: service
-        )
     }
 
-    func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard let characteristics = service.characteristics else {
-            let pending = connectContinuation
-            connectContinuation = nil
-            pending?.resume(throwing: error ?? ConnectionError.characteristicNotFound)
-            return
-        }
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        MainActor.assumeIsolated {
+            guard let characteristics = service.characteristics else {
+                let pending = connectContinuation
+                connectContinuation = nil
+                pending?.resume(throwing: error ?? ConnectionError.characteristicNotFound)
+                return
+            }
 
-        for characteristic in characteristics {
+            for characteristic in characteristics {
+                switch characteristic.uuid {
+                case Self.publicKeyCharUUID: publicKeyCharacteristic = characteristic
+                case Self.deviceIdCharUUID: deviceIdCharacteristic = characteristic
+                case Self.challengeCharUUID: challengeCharacteristic = characteristic
+                case Self.signatureCharUUID: signatureCharacteristic = characteristic
+                default: break
+                }
+            }
+
+            guard let publicKeyCharacteristic, let deviceIdCharacteristic else {
+                let pending = connectContinuation
+                connectContinuation = nil
+                pending?.resume(throwing: ConnectionError.characteristicNotFound)
+                return
+            }
+
+            peripheral.readValue(for: publicKeyCharacteristic)
+            peripheral.readValue(for: deviceIdCharacteristic)
+        }
+    }
+
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        MainActor.assumeIsolated {
+            if let error {
+                if characteristic.uuid == Self.signatureCharUUID {
+                    let pending = signContinuation
+                    signContinuation = nil
+                    pending?.resume(throwing: error)
+                } else {
+                    let pending = connectContinuation
+                    connectContinuation = nil
+                    pending?.resume(throwing: error)
+                }
+                return
+            }
+
+            guard let data = characteristic.value else { return }
+
             switch characteristic.uuid {
-            case Self.publicKeyCharUUID: publicKeyCharacteristic = characteristic
-            case Self.deviceIdCharUUID: deviceIdCharacteristic = characteristic
-            case Self.challengeCharUUID: challengeCharacteristic = characteristic
-            case Self.signatureCharUUID: signatureCharacteristic = characteristic
-            default: break
+            case Self.publicKeyCharUUID, Self.deviceIdCharUUID:
+                completeConnectIfReady()
+            case Self.signatureCharUUID:
+                let pending = signContinuation
+                signContinuation = nil
+                pending?.resume(returning: data.base64EncodedString())
+            default:
+                break
             }
         }
-
-        guard let publicKeyCharacteristic, let deviceIdCharacteristic else {
-            let pending = connectContinuation
-            connectContinuation = nil
-            pending?.resume(throwing: ConnectionError.characteristicNotFound)
-            return
-        }
-
-        peripheral.readValue(for: publicKeyCharacteristic)
-        peripheral.readValue(for: deviceIdCharacteristic)
     }
 
-    func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        if let error {
-            if characteristic.uuid == Self.signatureCharUUID {
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        // The actual signature arrives via didUpdateValueFor's notify, once the firmware
+        // finishes signing — this write acknowledgment on its own doesn't resolve anything.
+        MainActor.assumeIsolated {
+            if let error, characteristic.uuid == Self.challengeCharUUID {
                 let pending = signContinuation
                 signContinuation = nil
                 pending?.resume(throwing: error)
-            } else {
-                let pending = connectContinuation
-                connectContinuation = nil
-                pending?.resume(throwing: error)
             }
-            return
-        }
-
-        guard let data = characteristic.value else { return }
-
-        switch characteristic.uuid {
-        case Self.publicKeyCharUUID, Self.deviceIdCharUUID:
-            completeConnectIfReady()
-        case Self.signatureCharUUID:
-            let pending = signContinuation
-            signContinuation = nil
-            pending?.resume(returning: data.base64EncodedString())
-        default:
-            break
-        }
-    }
-
-    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        // The actual signature arrives via didUpdateValueFor's notify, once the firmware
-        // finishes signing — this write acknowledgment on its own doesn't resolve anything.
-        if let error, characteristic.uuid == Self.challengeCharUUID {
-            let pending = signContinuation
-            signContinuation = nil
-            pending?.resume(throwing: error)
         }
     }
 

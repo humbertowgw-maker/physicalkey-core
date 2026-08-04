@@ -23,7 +23,11 @@ enum KeyManagerError: Error {
     case biometricsUnavailable(Error)
 }
 
-final class KeyManager {
+// @unchecked Sendable: every stored property below is a `let` constant (no mutable
+// instance state), and all methods either operate on function-local variables or talk to
+// the Keychain/LAContext APIs, which are safe for concurrent access on their own — this
+// class has nothing that actually needs actor isolation to share safely.
+final class KeyManager: @unchecked Sendable {
     static let shared = KeyManager()
 
     private let keyAccount = "com.physicalkey.identity.privatekey"
