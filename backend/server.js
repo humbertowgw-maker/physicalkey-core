@@ -10,6 +10,7 @@ import { validatePhoneAttestation } from './auth/phone-auth.js';
 import { validateDeviceSignature, registerDevice } from './auth/device-auth.js';
 import { grantGitAccess, parseBasicAuth, validateGitCredentials } from './git/git-credentials.js';
 import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
+import { getIdentity, resetIdentity } from './auth/identity-admin.js';
 
 dotenv.config();
 
@@ -240,6 +241,33 @@ const requireAdmin = (req, res, next) => {
 
 app.get('/admin/forensics', requireAdmin, (req, res) => {
   res.json(getForensicsReport());
+});
+
+// Inspect one identity's trust-on-first-use registration (phone or device). Read-only —
+// safe to call to check current state before deciding whether a reset is actually needed.
+app.get('/admin/identities/:deviceId', requireAdmin, (req, res) => {
+  const identity = getIdentity(req.params.deviceId);
+  if (!identity) {
+    return res.status(404).json({ error: 'No identity registered for this deviceId' });
+  }
+  res.json(identity);
+});
+
+// Resets one deviceId's trust-on-first-use registration, so its NEXT auth attempt
+// registers fresh with whatever key it currently presents. Needed whenever a deviceId's
+// underlying key legitimately changes — a phone's Keychain identity recreated, an ESP32
+// board's flash erased and its Ed25519 identity regenerated — since trust-on-first-use
+// otherwise locks that deviceId out permanently with no self-service recovery. This is a
+// deliberate, narrowly-scoped exception to that lock, not a bypass of it: it still
+// requires knowing the exact deviceId and full admin auth, and the NEXT registration is
+// itself still subject to trust-on-first-use (whoever registers next owns it).
+app.delete('/admin/identities/:deviceId', requireAdmin, (req, res) => {
+  const removed = resetIdentity(req.params.deviceId);
+  if (!removed) {
+    return res.status(404).json({ error: 'No identity registered for this deviceId' });
+  }
+  console.log(`⚠ Admin reset identity: ${req.params.deviceId} (was kind=${removed.kind}, registered_at=${removed.registered_at})`);
+  res.json({ status: 'reset', deviceId: req.params.deviceId, previousKind: removed.kind });
 });
 
 // Honeypot decoy endpoint

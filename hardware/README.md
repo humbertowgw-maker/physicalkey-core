@@ -101,6 +101,15 @@ Practical fallout of enabling this:
 - Enabling this on an already-flashed board requires a full chip erase first — old
   plaintext NVS entries aren't in the format NVS Encryption expects, so identity and any
   existing BLE bond reset and need re-pairing.
+- **The backend also needs telling.** A board's `deviceId` is derived from its fixed
+  eFuse MAC, so it stays the same across the erase — but its Ed25519 identity doesn't.
+  The backend locks in the first key it ever sees per deviceId (trust-on-first-use) and
+  never updates it, so after an erase, re-pairing over Bluetooth will succeed but the
+  *backend* auth step will keep failing ("Device verification failed") until that
+  deviceId's stale registration is reset — `DELETE /admin/identities/:deviceId` (admin
+  auth required). See `SETUP_COMPLETE.md`'s "Trust-on-first-use lockouts" section for
+  the full story and exact usage. Same applies to a phone if its Keychain identity ever
+  gets recreated.
 - Development Mode was chosen over Release Mode deliberately: Release Mode additionally
   and permanently disables USB/serial reflashing, which would brick the update path for
   this actively-developed project with no OTA system built yet.

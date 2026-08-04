@@ -1,5 +1,69 @@
 # PhysicalKey Local Backend Setup — Results
 
+## Trust-on-first-use lockouts, and the fix (2026-08-04)
+
+**The bug, as a user hit it:** after re-flashing 3 ESP32 boards to enable flash+NVS
+encryption (see `hardware/README.md`) — which requires a full chip erase, regenerating
+each board's Ed25519 identity — pairing got stuck in a loop: Face ID kept succeeding,
+Bluetooth pairing kept succeeding, but the backend kept rejecting with "Device
+verification failed" / "Phone verification failed" for no visible reason. Same root
+cause hit a phone identity earlier for an unrelated reason (its local Keychain identity
+ended up not matching what the backend had on file).
+
+**Root cause:** trust-on-first-use (see the persistence section below) is deliberately
+permanent — the whole point is that a restart or an attacker can't hijack an
+already-registered `deviceId` by re-registering a different key. But that same property
+means there was no way to distinguish "an attacker trying to steal this deviceId" from
+"the real owner's key legitimately changed" (a re-flashed board, a recreated phone
+identity) — both look identical to the backend: same `deviceId`, different key,
+signature no longer matches. Confirmed directly, not guessed: added a temporary debug
+log printing the exact registered key / challenge / signature bytes, redeployed,
+reproduced the failure, and independently re-ran the same `crypto.verify()` call
+locally — genuinely a non-matching signature, not a formatting/encoding bug.
+
+**The fix — two parts:**
+1. **Immediate**: reset the specific stale identities directly (initially via `railway
+   ssh` + a one-off `node:sqlite` script against the production DB file, since no admin
+   tooling existed yet for this).
+2. **Proper**: added real admin endpoints so this never needs raw DB surgery again —
+   `backend/auth/identity-admin.js` + two routes in `server.js`:
+   - `GET /admin/identities/:deviceId` — inspect a registration (404 if none).
+   - `DELETE /admin/identities/:deviceId` — reset it, so the *next* auth attempt
+     re-registers fresh via trust-on-first-use. Still requires full admin auth
+     (`requireAdmin`, same JWT-as-`ADMIN_DEVICE_ID` gate as `/admin/forensics`) — this
+     is a deliberate, narrowly-scoped exception to the lock, not a bypass of it: you
+     still need to know the exact `deviceId` and be authenticated as the admin device,
+     and whoever registers next after a reset owns that identity from then on.
+
+   Tested end-to-end against production with a real admin session (register a throwaway
+   identity → admin GET finds it → admin DELETE resets it → GET now 404 → confirmed
+   *without* a valid admin token both routes correctly 401).
+
+**Example usage** (needs a valid admin `sessionToken` — see `scripts/test-crypto-flow.js`
+for how to complete the phone+device auth flow, or reuse `keys/admin-device.key.pem` /
+`keys/admin-phone.key.pem` if a session already exists for `demo-device-admin-001`):
+```bash
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  https://physicalkey-core-production.up.railway.app/admin/identities/physicalkey-device-680947e0684c
+
+curl -X DELETE -H "Authorization: Bearer $ADMIN_TOKEN" \
+  https://physicalkey-core-production.up.railway.app/admin/identities/physicalkey-device-680947e0684c
+```
+
+**When you'll hit this again:** any time an ESP32 board's flash gets erased
+(re-flashing alone doesn't erase NVS and is fine; `erase-flash` does), or a phone's
+Keychain identity gets recreated — that deviceId's *old* registration needs resetting
+via the endpoint above before it can pair again. Not automatic on purpose — an
+automatic "any new key wins" policy would defeat the actual security property
+trust-on-first-use exists for.
+
+**Also set up along the way**: an SSH key (`~/.ssh/id_ed25519`) registered with Railway
+(`railway ssh keys add`) for direct container access (`railway ssh -- <command>`) —
+useful for exactly this kind of direct-DB diagnosis in the future, now that it exists.
+This is also what the "not worth chasing" honeypot-cleanup note below was blocked on;
+that's unblocked now too, if it's ever worth doing.
+
+
 **Setup completed at:** 2026-08-03 11:32 UTC
 **Status:** Backend running locally. Not everything in the original test list passed — see below.
 
