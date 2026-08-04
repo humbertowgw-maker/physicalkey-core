@@ -31,3 +31,34 @@ jobs:
       - run: npm ci
 
       - run: npm test
+
+  # Runs the actual Dockerfile and boots the resulting image, catching drift between it and
+  # the source tree (e.g. a new source directory that npm test never notices because it runs
+  # server.js directly via node, not through the image) — added after exactly that class of
+  # bug (a missing `COPY audit ./audit`) shipped a crash-looping container to production.
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: docker build -t physicalkey-backend-ci ./backend
+
+      - name: Boot the image and wait for /health
+        run: |
+          docker run -d --name pk-smoke -p 3000:3000 -e SECRET_KEY=ci-smoke-test-secret physicalkey-backend-ci
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/health; then
+              echo "Container is healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Container never became healthy — logs:"
+          docker logs pk-smoke
+          exit 1
+
+      - if: always()
+        run: docker logs pk-smoke || true
+
+      - if: always()
+        run: docker rm -f pk-smoke || true
