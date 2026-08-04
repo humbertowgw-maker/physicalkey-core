@@ -105,17 +105,17 @@ Practical fallout of enabling this:
   and permanently disables USB/serial reflashing, which would brick the update path for
   this actively-developed project with no OTA system built yet.
 
+All 3 physical boards now have flash + NVS encryption applied and verified (clean
+bring-up, `NVS partition "nvs" is encrypted.` in each boot log, survives a reboot with
+identity intact). Each got a fresh identity as part of the required erase, so each needs
+(re-)pairing with a phone before use.
+
 ## What's NOT done yet
 
 - **Boards not yet tested against multiple independent phones as separate real users.**
   Single-bond-per-board enforcement (see above) is verified by code review and by
   confirming a *second* connection attempt gets rejected in principle, but not yet by
   actually pairing two different physical phones against the same board one after another.
-- **Two boards from this session may still be running stale test firmware or an older
-  firmware revision** (`BlinkTest`, `MinimalBLETest`, `WiFiRadioTest` from the crash
-  investigation, or the pre-security-hardening/pre-encryption build) — check which
-  specific boards have received the latest `firmware-idf` build with flash+NVS encryption
-  before assuming all three are equivalently hardened.
 
 ## Building it yourself
 
@@ -131,8 +131,7 @@ idf.py -p /dev/cu.usbserial-0001 build flash monitor
 
 ## Next real steps, in order
 
-1. **Apply flash + NVS encryption to the remaining two boards** (only one has it as of
-   this writing) — same erase + reflash + verify process documented above.
-2. **Pair the remaining boards with a second real phone**, treating it as an independent
-   real user, to actually exercise the single-bond-per-board rejection rather than just
-   trust the code review.
+1. **Pair all 3 boards with phones** (each needs it — the encryption migration reset
+   every board's identity and bond). Use a second real phone for at least one board,
+   treating it as an independent real user, to actually exercise the
+   single-bond-per-board rejection rather than just trust the code review.
