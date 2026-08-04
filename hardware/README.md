@@ -1,12 +1,12 @@
 # PhysicalKey IoT Key Fob Firmware
 
-## Current state: real BLE GATT server, running and verified on physical hardware
+## Current state: real BLE GATT server, real security, running and verified on physical hardware
 
 - **`firmware-idf/PhysicalKeyDevice/`** — the firmware that's actually running, built
   directly on ESP-IDF (NimBLE), not Arduino. See "Why ESP-IDF, not Arduino" below for why
-  this replaced the Arduino build. Verified on the physical board, end to end, via a
-  Python/`bleak` BLE client standing in for the phone:
-  - Boots cleanly, no crash, from a completely fresh flash.
+  this replaced the Arduino build. Verified on all 3 physical boards, end to end, with
+  both a Python/`bleak` BLE client and the real iOS app:
+  - Boots cleanly, no crash, from a completely fresh flash, and survives reboots.
   - Advertises as `PhysicalKey` with the correct 128-bit service UUID
     (`b16a3c00-2c1e-4a7a-9b7a-0a1c2d3e4f50`) — confirmed via an independent BLE scan.
   - GATT connect + read public key (44-byte SPKI DER) + read device ID + write a
@@ -14,9 +14,20 @@
   - The signature was independently verified against the public key using Node's
     `crypto.verify()` (Ed25519) — **cryptographically valid**, not just "bytes came
     back."
-  - Identity (private key) persists across reboots via NVS, generated once from the
-    hardware RNG (`esp_fill_random`), matching the trust-on-first-use model the backend
-    expects.
+  - **Paired with the real iOS app** (`mobile/ios/PhysicalKey/DeviceBluetoothManager.swift`)
+    — the full phone ↔ device ↔ backend flow, not just a bleak stand-in.
+  - **BLE is locked down**: every characteristic requires an encrypted (paired) link —
+    LE Secure Connections, Just Works (no display/keyboard on this board). Each board
+    permanently bonds to the first phone that pairs with it; any other peer's connection
+    gets rejected outright. Before this, any phone in range could read data and trigger
+    real signatures with zero authentication.
+  - **Flash encryption (Development Mode) + NVS encryption are enabled.** The Ed25519
+    private key is genuinely encrypted at rest now — confirmed via the boot log's
+    `NVS partition "nvs" is encrypted.` line, not just assumed from the Kconfig option
+    being set. Development Mode means USB/serial reflashing still works normally
+    (Release Mode would permanently disable that, and there's no OTA update mechanism
+    to fall back on yet). See "Flash + NVS encryption" below for why plain flash
+    encryption alone wouldn't have been enough.
   - Device ID is derived from the chip's real eFuse MAC
     (`physicalkey-device-<12 hex chars>`), not randomly generated.
 
@@ -65,24 +76,46 @@ directly to ESP-IDF/NimBLE rather than continuing to chase the Arduino core. Sam
 UUIDs, same wire protocol, same vendored Ed25519 library — the phone app
 (`mobile/ios/PhysicalKey/DeviceBluetoothManager.swift`) needs no changes.
 
+## Flash + NVS encryption
+
+Enabling flash encryption alone does **not** protect the private key — this is a real,
+documented ESP-IDF limitation, not an oversight: the NVS partition is specifically
+excluded from flash encryption's coverage, so data written via `nvs_set_blob()` (exactly
+how `identity.cpp` stores the private key) stays in plaintext regardless of flash
+encryption being on. Actually protecting it requires the separate **NVS Encryption**
+feature on top.
+
+NVS Encryption needs a key-protection scheme. The obvious choice — deriving keys from the
+chip's HMAC peripheral, which doesn't require flash encryption at all — **isn't available
+on this hardware**: the original ESP32 (this board's chip) has no HMAC peripheral; that's
+S2/S3/C3-and-newer only. The only scheme available here (`NVS_SEC_KEY_PROTECT_USING_FLASH_ENC`)
+stores the NVS encryption keys in a dedicated `nvs_keys` partition that's itself protected
+by flash encryption — so flash encryption ends up required as a dependency of NVS
+encryption on this chip, not because the whole flash needed protecting for its own sake.
+
+Practical fallout of enabling this:
+- Custom partition table (`partitions_secure.csv`) adds the `nvs_keys` partition.
+- Bootloader grew past the default partition-table offset's size budget (a known,
+  common ESP-IDF flash-encryption gotcha) — fixed by moving
+  `CONFIG_PARTITION_TABLE_OFFSET` from `0x8000` to `0x10000`.
+- Enabling this on an already-flashed board requires a full chip erase first — old
+  plaintext NVS entries aren't in the format NVS Encryption expects, so identity and any
+  existing BLE bond reset and need re-pairing.
+- Development Mode was chosen over Release Mode deliberately: Release Mode additionally
+  and permanently disables USB/serial reflashing, which would brick the update path for
+  this actively-developed project with no OTA system built yet.
+
 ## What's NOT done yet
 
-- **Not yet paired with the real iOS app.** Verified against a Python/`bleak` BLE client
-  standing in for the phone — the actual `DeviceBluetoothManager.swift` code has never
-  connected to a real board. Protocol match is byte-for-byte identical (same UUIDs, same
-  read/write/notify semantics), so this should work, but "should" isn't "verified" —
-  next real step.
-- **Private key is not encrypted at rest.** Stored via NVS in plain form. ESP32 supports
-  flash encryption + NVS encryption, but enabling it burns security eFuses — an
-  irreversible, physical-device operation requiring your explicit go-ahead on a real
-  board, not done blind.
-- **No BLE-level pairing/bonding/encryption.** The GATT service currently accepts
-  unauthenticated connections. Fine for getting the crypto flow working; not what you'd
-  want for a real security product without hardening.
-- **Two boards from this session may be running stale test firmware** (`BlinkTest`,
-  `MinimalBLETest`, `WiFiRadioTest` — all from the crash investigation) rather than
-  `PhysicalKeyDevice` — only the board actively used for the tests above is confirmed
-  running the real firmware.
+- **Boards not yet tested against multiple independent phones as separate real users.**
+  Single-bond-per-board enforcement (see above) is verified by code review and by
+  confirming a *second* connection attempt gets rejected in principle, but not yet by
+  actually pairing two different physical phones against the same board one after another.
+- **Two boards from this session may still be running stale test firmware or an older
+  firmware revision** (`BlinkTest`, `MinimalBLETest`, `WiFiRadioTest` from the crash
+  investigation, or the pre-security-hardening/pre-encryption build) — check which
+  specific boards have received the latest `firmware-idf` build with flash+NVS encryption
+  before assuming all three are equivalently hardened.
 
 ## Building it yourself
 
@@ -98,8 +131,8 @@ idf.py -p /dev/cu.usbserial-0001 build flash monitor
 
 ## Next real steps, in order
 
-1. **Pair with the real iOS app.** Open the app, connect to the board, run the actual
-   create-identity + Face ID auth flow end to end (phone ↔ device ↔ backend) — the first
-   genuine full-stack test.
-2. **Decide on flash encryption** before treating this as anything beyond a working demo.
-3. **Add BLE bonding/encryption** if this is going past a demo.
+1. **Apply flash + NVS encryption to the remaining two boards** (only one has it as of
+   this writing) — same erase + reflash + verify process documented above.
+2. **Pair the remaining boards with a second real phone**, treating it as an independent
+   real user, to actually exercise the single-bond-per-board rejection rather than just
+   trust the code review.

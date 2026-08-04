@@ -1,0 +1,10 @@
+# Same layout as ESP-IDF's default single-app table, plus an nvs_keys partition — required
+# for NVS encryption (protects the Ed25519 private key at rest; flash encryption alone does
+# NOT cover the NVS partition, see hardware/README.md). nvs and phy_init stay first, in the
+# same order and size as the default table, so their offsets are unchanged and existing NVS
+# data lines up the same way it always has.
+# Name,   Type, SubType,  Offset,  Size, Flags
+nvs,      data, nvs,      ,        0x6000,
+phy_init, data, phy,      ,        0x1000,
+nvs_keys, data, nvs_keys, ,        0x1000, encrypted
+factory,  app,  factory,  ,        1M,
