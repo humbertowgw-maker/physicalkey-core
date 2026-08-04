@@ -5,18 +5,11 @@ import Foundation
 // yet — not a workaround, the documented mechanism for exactly this situation.
 @preconcurrency import CoreBluetooth
 
-/// Speaks the GATT protocol defined by hardware/firmware/PhysicalKeyDevice/PhysicalKeyDevice.ino.
-/// UUIDs below must stay byte-for-byte identical to the firmware's #define block — there's
-/// no negotiation, just a fixed contract both sides hardcode.
-///
-/// NOT TESTED ON HARDWARE. This compiles and type-checks, but there is no ESP32 board
-/// paired with any iPhone anywhere — nothing here has ever actually talked to the firmware.
-/// The firmware side (compiled, not flashed — see hardware/README.md) and this client were
-/// written from the same protocol spec, not verified against each other by running both.
-/// The one thing NOT blind here: the Ed25519 signature format both sides produce/expect
-/// was proven compatible with the backend independently, in both mobile/ios-crypto-poc and
-/// hardware/firmware-crypto-poc — what's unverified is specifically the Bluetooth transport
-/// connecting them, not the cryptography.
+/// Speaks the GATT protocol defined by hardware/firmware-idf/PhysicalKeyDevice (ESP-IDF —
+/// see hardware/README.md for why this replaced the original Arduino build). UUIDs below
+/// must stay byte-for-byte identical to the firmware's UUIDs — there's no negotiation,
+/// just a fixed contract both sides hardcode. Verified against real physical boards,
+/// including BLE-level security (LE Secure Connections pairing, per-board bonding).
 // CBCentralManager is initialized below with `queue: nil`, which per Apple's docs means
 // all delegate callbacks land on the main queue — @MainActor here declares what's already
 // true at runtime, not an isolation choice made for the compiler's benefit.
@@ -58,19 +51,45 @@ final class DeviceBluetoothManager: NSObject, ObservableObject {
     // callback firing twice and resuming an already-resumed continuation (which crashes).
     private var connectContinuation: CheckedContinuation<DeviceIdentity, Error>?
     private var signContinuation: CheckedContinuation<String, Error>?
+    private var stateContinuation: CheckedContinuation<Void, Error>?
 
     override init() {
         super.init()
         centralManager = CBCentralManager(delegate: self, queue: nil)
     }
 
-    /// Scans for a PhysicalKey device, connects, discovers the service/characteristics, and
-    /// reads back its public key + device ID. Times out after 15s if nothing is found —
-    /// untested how realistic that window is without hardware to measure against.
-    func connectToDevice() async throws -> DeviceIdentity {
-        guard centralManager.state == .poweredOn else {
+    /// `CBCentralManager.state` starts as `.unknown` right after init and only becomes
+    /// accurate a moment later, delivered async via centralManagerDidUpdateState — a
+    /// manager created and immediately queried (as any fresh, short-lived
+    /// DeviceBluetoothManager is, e.g. OrganizationViewModel's scan-and-claim flow) would
+    /// otherwise see stale `.unknown` state and incorrectly report Bluetooth as
+    /// unavailable even when it's genuinely on. This actually waits for the real answer
+    /// instead of trusting whatever the state happens to be at the instant of the call.
+    private func waitForPoweredOn() async throws {
+        switch centralManager.state {
+        case .poweredOn:
+            return
+        case .unauthorized, .unsupported, .poweredOff:
             throw ConnectionError.bluetoothUnavailable
+        default:
+            break // .unknown / .resetting — genuinely still waiting for the real state
         }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            self.stateContinuation = continuation
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+                guard let self, let pending = self.stateContinuation else { return }
+                self.stateContinuation = nil
+                pending.resume(throwing: ConnectionError.bluetoothUnavailable)
+            }
+        }
+    }
+
+    /// Scans for a PhysicalKey device, connects, discovers the service/characteristics, and
+    /// reads back its public key + device ID. Times out after 15s if nothing is found.
+    func connectToDevice() async throws -> DeviceIdentity {
+        try await waitForPoweredOn()
 
         return try await withCheckedThrowingContinuation { continuation in
             self.connectContinuation = continuation
@@ -123,8 +142,19 @@ final class DeviceBluetoothManager: NSObject, ObservableObject {
 // execution context isn't visible to the type system.
 extension DeviceBluetoothManager: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        // Nothing to do here proactively — connectToDevice() checks .poweredOn itself
-        // before scanning, since a scan call before Bluetooth is ready is a no-op.
+        MainActor.assumeIsolated {
+            guard let pending = stateContinuation else { return }
+            switch central.state {
+            case .poweredOn:
+                stateContinuation = nil
+                pending.resume()
+            case .unauthorized, .unsupported, .poweredOff:
+                stateContinuation = nil
+                pending.resume(throwing: ConnectionError.bluetoothUnavailable)
+            default:
+                break // .unknown / .resetting — keep waiting for a real answer
+            }
+        }
     }
 
     nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi: NSNumber) {

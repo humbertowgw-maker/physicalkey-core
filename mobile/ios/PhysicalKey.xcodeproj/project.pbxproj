@@ -9,20 +9,24 @@
 /* Begin PBXBuildFile section */
 		0CC9DC77EACC56346C884647 /* DeviceBluetoothManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248EABAD6771BF9B4147E09A /* DeviceBluetoothManager.swift */; };
 		2998E690B0E88BCF4B5C0ECB /* PhysicalKeyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC605602BE0E09BB723907B6 /* PhysicalKeyApp.swift */; };
+		5FF86FAC6AA623699A6804C7 /* OrganizationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF408DC49EBE7DE23CF1AE54 /* OrganizationViewModel.swift */; };
 		81329ED07C645AB92D440EFC /* PhysicalKeyAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B1FBE00DC6F78B9D2490375 /* PhysicalKeyAPI.swift */; };
+		A832C1D75BFCB04293E3131C /* TeamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A399FED7F3B305FAE37A665 /* TeamView.swift */; };
 		B859B48C3D90551FDC516EAA /* KeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1673C4E131A63D20EDCAF518 /* KeyManager.swift */; };
 		BBA845A301D98FED0EA6045A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F037FF1DDD1650B16ECCDA9 /* ContentView.swift */; };
 		F96DEBAD1DA7BEF058F9232F /* AuthViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CA6D4F45E2E62C3E0B324FF /* AuthViewModel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0A399FED7F3B305FAE37A665 /* TeamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeamView.swift; sourceTree = "<group>"; };
 		0CA6D4F45E2E62C3E0B324FF /* AuthViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthViewModel.swift; sourceTree = "<group>"; };
 		1673C4E131A63D20EDCAF518 /* KeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyManager.swift; sourceTree = "<group>"; };
 		248EABAD6771BF9B4147E09A /* DeviceBluetoothManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceBluetoothManager.swift; sourceTree = "<group>"; };
 		3B1FBE00DC6F78B9D2490375 /* PhysicalKeyAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicalKeyAPI.swift; sourceTree = "<group>"; };
 		4F037FF1DDD1650B16ECCDA9 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		98109053DDB9665234E0B9E5 /* PhysicalKey.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhysicalKey.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		98109053DDB9665234E0B9E5 /* PhysicalKey.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PhysicalKey.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BC605602BE0E09BB723907B6 /* PhysicalKeyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicalKeyApp.swift; sourceTree = "<group>"; };
+		EF408DC49EBE7DE23CF1AE54 /* OrganizationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizationViewModel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -41,8 +45,10 @@
 				4F037FF1DDD1650B16ECCDA9 /* ContentView.swift */,
 				248EABAD6771BF9B4147E09A /* DeviceBluetoothManager.swift */,
 				1673C4E131A63D20EDCAF518 /* KeyManager.swift */,
+				EF408DC49EBE7DE23CF1AE54 /* OrganizationViewModel.swift */,
 				3B1FBE00DC6F78B9D2490375 /* PhysicalKeyAPI.swift */,
 				BC605602BE0E09BB723907B6 /* PhysicalKeyApp.swift */,
+				0A399FED7F3B305FAE37A665 /* TeamView.swift */,
 			);
 			path = PhysicalKey;
 			sourceTree = "<group>";
@@ -83,6 +89,12 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					E01122BD118B99E7E75C0397 = {
+						DevelopmentTeam = 9RYL8ZRC3U;
+						ProvisioningStyle = Automatic;
+					};
+				};
 			};
 			buildConfigurationList = 2BE6640CC0519759FF9670C2 /* Build configuration list for PBXProject "PhysicalKey" */;
 			developmentRegion = en;
@@ -112,8 +124,10 @@
 				BBA845A301D98FED0EA6045A /* ContentView.swift in Sources */,
 				0CC9DC77EACC56346C884647 /* DeviceBluetoothManager.swift in Sources */,
 				B859B48C3D90551FDC516EAA /* KeyManager.swift in Sources */,
+				5FF86FAC6AA623699A6804C7 /* OrganizationViewModel.swift in Sources */,
 				81329ED07C645AB92D440EFC /* PhysicalKeyAPI.swift in Sources */,
 				2998E690B0E88BCF4B5C0ECB /* PhysicalKeyApp.swift in Sources */,
+				A832C1D75BFCB04293E3131C /* TeamView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -188,6 +202,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 9RYL8ZRC3U;
 				INFOPLIST_FILE = "Generated-Info.plist";
@@ -208,6 +223,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 9RYL8ZRC3U;
 				INFOPLIST_FILE = "Generated-Info.plist";

@@ -2,33 +2,57 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var viewModel = AuthViewModel()
+    @State private var orgViewModel: OrganizationViewModel?
 
     var body: some View {
-        VStack(spacing: 20) {
-            Text("PhysicalKey")
-                .font(.largeTitle.bold())
+        NavigationStack {
+            VStack(spacing: 20) {
+                Text("PhysicalKey")
+                    .font(.largeTitle.bold())
 
-            statusView
+                statusView
 
-            actionButton
+                actionButton
 
-            if !viewModel.lastLog.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(viewModel.lastLog.enumerated()), id: \.offset) { _, line in
-                            Text(line)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
+                if !viewModel.lastLog.isEmpty {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(viewModel.lastLog.enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 200)
+                    .padding(.horizontal)
+                }
+            }
+            .padding()
+            .toolbar {
+                // Team management only needs a phone session, not a full device-paired
+                // one — see AuthViewModel.phoneSessionToken and OrganizationViewModel.
+                if let token = viewModel.phoneSessionToken {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        NavigationLink("Team") {
+                            TeamView(viewModel: orgViewModel(for: token))
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 200)
-                .padding(.horizontal)
             }
         }
-        .padding()
         .onAppear { viewModel.onAppear() }
+    }
+
+    private func orgViewModel(for token: String) -> OrganizationViewModel {
+        if let orgViewModel {
+            orgViewModel.updateSessionToken(token)
+            return orgViewModel
+        }
+        let created = OrganizationViewModel(api: viewModel.api, myDeviceId: viewModel.myDeviceId, phoneSessionToken: token)
+        orgViewModel = created
+        return created
     }
 
     @ViewBuilder

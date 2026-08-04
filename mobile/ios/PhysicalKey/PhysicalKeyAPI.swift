@@ -16,6 +16,11 @@ struct PhysicalKeyAPI {
         let deviceChallengeId: String
         let deviceChallenge: String
         let expiresIn: Int
+        /// Scoped to org/team management only (`scope: 'phone_session'`, 1h expiry) —
+        /// deliberately separate from the full_access sessionToken from deviceVerify,
+        /// since managing a team (e.g. revoking someone who left) shouldn't require
+        /// having your own physical key device on hand.
+        let phoneSessionToken: String
     }
 
     struct GitCredentials: Decodable {
@@ -32,6 +37,122 @@ struct PhysicalKeyAPI {
         let sessionToken: String
         let gitCredentials: GitCredentials
         let message: String
+    }
+
+    // MARK: - Organizations (Team accounts)
+    // See backend/auth/organizations.js for the source of truth. All of these use the
+    // phoneSessionToken from phoneVerify, not the full_access sessionToken.
+
+    struct Organization: Decodable {
+        let id: String
+        let name: String
+        let ownerDeviceId: String
+        let createdAt: Double
+        let status: String
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, status
+            case ownerDeviceId = "owner_device_id"
+            case createdAt = "created_at"
+        }
+    }
+
+    struct OrgMember: Decodable, Identifiable {
+        var id: String { deviceId }
+        let deviceId: String
+        let role: String
+        let addedAt: Double
+        let status: String
+
+        enum CodingKeys: String, CodingKey {
+            case role, status
+            case deviceId = "device_id"
+            case addedAt = "added_at"
+        }
+    }
+
+    struct OrgDevice: Decodable, Identifiable {
+        var id: String { deviceId }
+        let deviceId: String
+        let addedAt: Double
+
+        enum CodingKeys: String, CodingKey {
+            case deviceId = "device_id"
+            case addedAt = "added_at"
+        }
+    }
+
+    struct OrgDetail: Decodable {
+        let id: String
+        let name: String
+        let ownerDeviceId: String
+        let createdAt: Double
+        let status: String
+        let members: [OrgMember]
+        let devices: [OrgDevice]
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, status, members, devices
+            case ownerDeviceId = "owner_device_id"
+            case createdAt = "created_at"
+        }
+    }
+
+    struct DeviceAccessGrant: Decodable, Identifiable {
+        var id: String { memberDeviceId }
+        let memberDeviceId: String
+        let grantedAt: Double
+
+        enum CodingKeys: String, CodingKey {
+            case memberDeviceId = "member_device_id"
+            case grantedAt = "granted_at"
+        }
+    }
+
+    private struct StatusResponse: Decodable { let status: String }
+
+    func createOrg(name: String, phoneSessionToken: String) async throws -> Organization {
+        try await post("/orgs", body: ["name": name], bearer: phoneSessionToken)
+    }
+
+    func getOrg(orgId: String, phoneSessionToken: String) async throws -> OrgDetail {
+        try await get("/orgs/\(orgId)", bearer: phoneSessionToken)
+    }
+
+    @discardableResult
+    func addMember(orgId: String, deviceId: String, role: String?, phoneSessionToken: String) async throws -> OrgMember {
+        var body: [String: Any] = ["deviceId": deviceId]
+        if let role { body["role"] = role }
+        return try await post("/orgs/\(orgId)/members", body: body, bearer: phoneSessionToken)
+    }
+
+    func removeMember(orgId: String, deviceId: String, phoneSessionToken: String) async throws {
+        let _: OrgMember = try await delete("/orgs/\(orgId)/members/\(deviceId)", bearer: phoneSessionToken)
+    }
+
+    @discardableResult
+    func claimDevice(orgId: String, deviceId: String, phoneSessionToken: String) async throws -> OrgDevice {
+        try await post("/orgs/\(orgId)/devices", body: ["deviceId": deviceId], bearer: phoneSessionToken)
+    }
+
+    func releaseDevice(orgId: String, deviceId: String, phoneSessionToken: String) async throws {
+        let _: OrgDevice = try await delete("/orgs/\(orgId)/devices/\(deviceId)", bearer: phoneSessionToken)
+    }
+
+    func listDeviceAccess(orgId: String, deviceId: String, phoneSessionToken: String) async throws -> [DeviceAccessGrant] {
+        try await get("/orgs/\(orgId)/devices/\(deviceId)/access", bearer: phoneSessionToken)
+    }
+
+    func grantDeviceAccess(orgId: String, deviceId: String, memberDeviceId: String, phoneSessionToken: String) async throws {
+        let _: StatusResponse = try await post(
+            "/orgs/\(orgId)/devices/\(deviceId)/access",
+            body: ["memberDeviceId": memberDeviceId],
+            bearer: phoneSessionToken
+        )
+    }
+
+    func revokeDeviceAccess(orgId: String, deviceId: String, memberDeviceId: String, phoneSessionToken: String) async throws {
+        let _: StatusResponse = try await delete("/orgs/\(orgId)/devices/\(deviceId)/access/\(memberDeviceId)", bearer: phoneSessionToken)
     }
 
     struct ProfileResponse: Decodable {
@@ -72,12 +193,6 @@ struct PhysicalKeyAPI {
         ])
     }
 
-    /// NOT YET WIRED TO REAL HARDWARE. There is no IoT key fob built yet (see
-    /// hardware/README in the original project docs) — this call needs a Bluetooth
-    /// handshake with the physical device to obtain `deviceId` and a signature from
-    /// *its* key, not the phone's. Left here so the shape of the call is right and the
-    /// rest of the auth flow can be wired up and tested, but do not treat a successful
-    /// call here as "the device stage is real" — it isn't, until real hardware exists.
     func deviceVerify(deviceChallengeId: String, deviceSignature: String, deviceId: String, publicKeyB64: String?) async throws -> DeviceVerifyResponse {
         var body: [String: Any] = [
             "deviceChallengeId": deviceChallengeId,
@@ -92,11 +207,12 @@ struct PhysicalKeyAPI {
         try await get("/api/profile", bearer: sessionToken)
     }
 
-    private func post<T: Decodable>(_ path: String, body: [String: Any]) async throws -> T {
+    private func post<T: Decodable>(_ path: String, body: [String: Any], bearer: String? = nil) async throws -> T {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
 
         let (data, response) = try await URLSession.shared.data(for: request)
         return try decode(data: data, response: response)
@@ -104,6 +220,15 @@ struct PhysicalKeyAPI {
 
     private func get<T: Decodable>(_ path: String, bearer: String) async throws -> T {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        return try decode(data: data, response: response)
+    }
+
+    private func delete<T: Decodable>(_ path: String, bearer: String) async throws -> T {
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.httpMethod = "DELETE"
         request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
 
         let (data, response) = try await URLSession.shared.data(for: request)

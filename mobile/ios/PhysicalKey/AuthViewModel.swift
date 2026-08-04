@@ -16,6 +16,17 @@ final class AuthViewModel: ObservableObject {
 
     @Published private(set) var stage: Stage = .notReady
     @Published private(set) var lastLog: [String] = []
+    /// Set once phone auth succeeds; independent of `stage` (a full device pairing isn't
+    /// needed to use it, and it stays valid across further stage transitions until it
+    /// expires server-side after 1h). Nil until the first successful phone auth this
+    /// session.
+    @Published private(set) var phoneSessionToken: String?
+
+    /// This phone's own deviceId, needed for org membership calls — e.g. checking your
+    /// own role in an org's member list. Exposed here rather than reaching into
+    /// KeyManager directly from other views, matching how the rest of this view model
+    /// already brokers access to it.
+    var myDeviceId: String { keyManager.deviceId }
 
     /// Whether an identity currently exists, so the UI can route a `.failed` retry back to
     /// "Create Identity" (if creation itself failed — e.g. no passcode/Face ID set up on
@@ -23,7 +34,9 @@ final class AuthViewModel: ObservableObject {
     /// a confusing "no such keychain item" error that masks the real problem.
     var hasIdentity: Bool { keyManager.hasIdentity }
 
-    private let api = PhysicalKeyAPI(baseURL: URL(string: "https://physicalkey-core-production.up.railway.app")!)
+    // Not private: TeamView's OrganizationViewModel reuses this same client rather than
+    // constructing its own duplicate instance pointed at the same backend.
+    let api = PhysicalKeyAPI(baseURL: URL(string: "https://physicalkey-core-production.up.railway.app")!)
     private let keyManager = KeyManager.shared
     private let bluetooth = DeviceBluetoothManager()
 
@@ -56,6 +69,7 @@ final class AuthViewModel: ObservableObject {
                 let verified = try await api.phoneVerify(challengeId: challenge.challengeId, signature: signature)
                 log("Phone verified. deviceChallengeId: \(verified.deviceChallengeId)")
 
+                phoneSessionToken = verified.phoneSessionToken
                 stage = .phoneVerified(deviceChallengeId: verified.deviceChallengeId, deviceChallenge: verified.deviceChallenge)
             } catch {
                 log("Phone auth failed: \(error)")
@@ -65,8 +79,8 @@ final class AuthViewModel: ObservableObject {
     }
 
     /// Runs the device half: scan/connect over Bluetooth to the key fob (see
-    /// DeviceBluetoothManager — untested on real hardware, no board exists to pair with
-    /// yet), have it sign the device challenge, then finish the backend flow.
+    /// DeviceBluetoothManager), have it sign the device challenge, then finish the
+    /// backend flow.
     func connectAndAuthenticateDevice() {
         guard case .phoneVerified(let deviceChallengeId, let deviceChallenge) = stage else { return }
 

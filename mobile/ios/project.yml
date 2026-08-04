@@ -16,6 +16,14 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "6.0"
+        # This looks backwards but is empirically what works: the Xcode account
+        # currently signed in on this Mac only registers 9RYL8ZRC3U, so that's what's
+        # needed to pass the initial "is this a valid account" check — from there,
+        # CODE_SIGN_STYLE: Automatic's real profile resolution correctly finds and uses
+        # the actual matching provisioning profile (team VDV59Q8X25) regardless of what's
+        # set here. Setting VDV59Q8X25 directly fails outright with "No Account for Team".
+        DEVELOPMENT_TEAM: 9RYL8ZRC3U
+        CODE_SIGN_STYLE: Automatic
     info:
       path: Generated-Info.plist
       properties:
