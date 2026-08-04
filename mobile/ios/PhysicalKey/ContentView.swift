@@ -65,9 +65,17 @@ struct ContentView: View {
         case .notReady:
             Button("Create Identity") { viewModel.createIdentity() }
                 .buttonStyle(.borderedProminent)
-        case .ready, .failed:
+        case .ready:
             Button("Authenticate with Face ID") { viewModel.authenticatePhone() }
                 .buttonStyle(.borderedProminent)
+        case .failed:
+            if viewModel.hasIdentity {
+                Button("Authenticate with Face ID") { viewModel.authenticatePhone() }
+                    .buttonStyle(.borderedProminent)
+            } else {
+                Button("Create Identity") { viewModel.createIdentity() }
+                    .buttonStyle(.borderedProminent)
+            }
         case .phoneVerifying, .connectingToDevice:
             ProgressView()
         case .phoneVerified:

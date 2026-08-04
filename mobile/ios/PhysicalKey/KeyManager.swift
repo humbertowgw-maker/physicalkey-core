@@ -17,10 +17,37 @@ import Security
 /// If that distinction matters for this product, the real fix is switching the backend to
 /// verify P-256/ECDSA signatures instead of Ed25519 so this can use
 /// `SecureEnclave.P256.Signing.PrivateKey` — that's a backend change, not just an app one.
-enum KeyManagerError: Error {
+enum KeyManagerError: Error, LocalizedError {
     case keychainWrite(OSStatus)
     case keychainRead(OSStatus)
     case biometricsUnavailable(Error)
+
+    /// Maps the handful of OSStatus codes actually reachable from this file's Keychain
+    /// calls to plain-language explanations. `errSecNotAvailable` on write is specifically
+    /// what this app's `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` +
+    /// `.biometryCurrentSet` access control returns when the device has no passcode set —
+    /// confirmed against a real device in this state, not a guess (an earlier version of
+    /// this mapping assumed `errSecParam` for this case, which was wrong). `errSecParam` is
+    /// kept mapped to the same message since some iOS versions reportedly return that
+    /// instead — better to over-match than fall through to a raw code for the single most
+    /// common first-run failure.
+    var errorDescription: String? {
+        switch self {
+        case .keychainWrite(let status), .keychainRead(let status):
+            switch status {
+            case errSecNotAvailable, errSecParam:
+                return "Set a passcode and enroll Face ID (or Touch ID) in Settings, then try again."
+            case errSecItemNotFound:
+                return "No identity has been created on this device yet. Tap Create Identity first."
+            case errSecAuthFailed, errSecUserCanceled:
+                return "Face ID authentication failed or was canceled."
+            default:
+                return "Keychain error (code \(status))."
+            }
+        case .biometricsUnavailable:
+            return "Face ID / Touch ID isn't available on this device. Set it up in Settings, then try again."
+        }
+    }
 }
 
 // @unchecked Sendable: every stored property below is a `let` constant (no mutable

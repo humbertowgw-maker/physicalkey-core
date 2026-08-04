@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import CoreBluetooth
 
 @MainActor
 final class AuthViewModel: ObservableObject {
@@ -16,6 +17,12 @@ final class AuthViewModel: ObservableObject {
     @Published private(set) var stage: Stage = .notReady
     @Published private(set) var lastLog: [String] = []
 
+    /// Whether an identity currently exists, so the UI can route a `.failed` retry back to
+    /// "Create Identity" (if creation itself failed — e.g. no passcode/Face ID set up on
+    /// this device) rather than always to "Authenticate", which would just fail again with
+    /// a confusing "no such keychain item" error that masks the real problem.
+    var hasIdentity: Bool { keyManager.hasIdentity }
+
     private let api = PhysicalKeyAPI(baseURL: URL(string: "https://physicalkey-core-production.up.railway.app")!)
     private let keyManager = KeyManager.shared
     private let bluetooth = DeviceBluetoothManager()
@@ -30,7 +37,7 @@ final class AuthViewModel: ObservableObject {
             log("Identity created. Public key: \(publicKey.prefix(16))…")
             stage = .ready
         } catch {
-            stage = .failed("Could not create identity: \(error)")
+            stage = .failed(Self.describe(error, action: "create identity"))
         }
     }
 
@@ -52,7 +59,7 @@ final class AuthViewModel: ObservableObject {
                 stage = .phoneVerified(deviceChallengeId: verified.deviceChallengeId, deviceChallenge: verified.deviceChallenge)
             } catch {
                 log("Phone auth failed: \(error)")
-                stage = .failed("\(error)")
+                stage = .failed(Self.describe(error, action: "authenticate"))
             }
         }
     }
@@ -85,12 +92,40 @@ final class AuthViewModel: ObservableObject {
                 stage = .authenticated(sessionToken: verified.sessionToken)
             } catch {
                 log("Device auth failed: \(error)")
-                stage = .failed("\(error)")
+                stage = .failed(Self.describe(error, action: "connect to the key device"))
             }
         }
     }
 
     private func log(_ message: String) {
         lastLog.append(message)
+    }
+
+    /// Prefers a `LocalizedError`'s human-readable message (e.g. KeyManagerError's Keychain
+    /// explanations) over dumping the raw Swift error description, which for something like
+    /// `keychainWrite(-50)` tells the user nothing actionable.
+    private static func describe(_ error: Error, action: String) -> String {
+        if let message = bluetoothPairingMessage(for: error) {
+            return message
+        }
+        if let message = (error as? LocalizedError)?.errorDescription {
+            return message
+        }
+        return "Could not \(action): \(error)"
+    }
+
+    /// `CBError.peerRemovedPairingInformation` is CoreBluetooth's specific signal that the
+    /// phone has a stored Bluetooth pairing key for this device that the device itself no
+    /// longer recognizes (e.g. the device's own key changed since they last paired) — iOS
+    /// won't retry pairing on its own in this state. Confirmed against a real device during
+    /// testing: the fix is always to forget the stale pairing and reconnect, so tell the
+    /// user that directly instead of surfacing the raw CoreBluetooth error code.
+    private static func bluetoothPairingMessage(for error: Error) -> String? {
+        let nsError = error as NSError
+        guard nsError.domain == CBErrorDomain,
+              nsError.code == CBError.peerRemovedPairingInformation.rawValue else {
+            return nil
+        }
+        return "This phone has an outdated pairing with this key device. Go to Settings → Bluetooth, tap the (i) next to \"PhysicalKey\", choose \"Forget This Device\", then try connecting again."
     }
 }

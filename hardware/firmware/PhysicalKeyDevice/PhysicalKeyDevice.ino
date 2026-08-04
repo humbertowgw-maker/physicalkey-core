@@ -107,7 +107,14 @@ class ChallengeWriteCallback : public BLECharacteristicCallbacks {
 };
 
 void setupBLE() {
-    BLEDevice::init(deviceId.c_str());
+    // Advertised name deliberately short and generic, NOT the full deviceId
+    // ("physicalkey-device-<12 hex chars>", 31 bytes on its own) -- combined with our
+    // 128-bit custom service UUID (18 bytes with header), that overflows BLE's 31-byte
+    // legacy advertising packet. A silently-overflowed/dropped service UUID in the
+    // advertisement is exactly what would make a phone's scanForPeripherals(withServices:)
+    // filter find nothing. The full unique deviceId is still available via the Device ID
+    // characteristic once connected -- it doesn't need to fit in the broadcast itself.
+    BLEDevice::init("PhysicalKey");
     BLEServer *server = BLEDevice::createServer();
     BLEService *service = server->createService(SERVICE_UUID);
 
@@ -133,6 +140,10 @@ void setupBLE() {
     BLEAdvertising *advertising = BLEDevice::getAdvertising();
     advertising->addServiceUUID(SERVICE_UUID);
     advertising->setScanResponse(true);
+    // Standard fix for a separate, well-documented ESP32-Arduino-BLE + iOS compatibility
+    // issue where iOS rejects/struggles with the connection interval the ESP32 defaults to.
+    advertising->setMinPreferred(0x06);
+    advertising->setMinPreferred(0x12);
     BLEDevice::startAdvertising();
 
     Serial.println("BLE advertising started.");
