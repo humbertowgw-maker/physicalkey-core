@@ -51,6 +51,60 @@ decision). Also deferred, lower urgency: backend-compromise blast-radius reducti
 (KMS-backed JWT signing, tamper-evident audit log — real architecture work, reasonable to
 defer until there's a concrete compliance/enterprise reason) and iOS certificate pinning.
 
+### Real troubleshooting wins from today — save future time on these
+
+Genuine bugs and dead ends hit and resolved while shipping the three phases above, worth
+knowing before they cost time again:
+
+- **A "successful" health check does not mean the LATEST deploy is live.** The first Phase B
+  deploy (`railway up --detach`) actually **failed the build**, but `railway status` still
+  showed `● Online` and `curl .../health` still returned `200` — because Railway keeps the
+  previous, still-working deployment serving traffic when a new one fails, exactly to avoid
+  downtime. This produced ~20 minutes of genuinely confusing results: a whole battery of
+  "production" tests (bootstrap/verified/mismatch flows) all passed, but were silently
+  testing the OLD, pre-fix code the entire time. The real signal was buried in
+  `railway status`'s deploy line (`Deploy failed (5m)`), not the health endpoint. **Always
+  check `railway status` explicitly for `Deploy failed` after `railway up`, don't just trust
+  `/health`.** Relatedly: `railway status`'s `● Online` also appears *during* an in-progress
+  `Building`/`Deploying` state, not just once fully settled — a status check needs to confirm
+  the absence of `Building`/`Deploying`, not just the presence of `Online`, or it'll report
+  "done" mid-deploy.
+- **The actual failure, once found:** the Dockerfile had a hardcoded
+  `COPY access ./access` step for a directory that Phase A had deleted (a dead permission-
+  check module removed as part of the audit fixes). Docker's `COPY` fails hard if the source
+  path doesn't exist locally. **When deleting a module/directory, also grep the Dockerfile
+  (and any other deploy manifests) for references to it** — nothing else catches this until
+  the actual build.
+- **`railway ssh` does not reliably show the live container's real data.** Querying the
+  production SQLite file directly via `railway ssh "node -e ..."` returned stale/wrong
+  results (old schema, or an empty freshly-created database) even when the actual running
+  server had already migrated and had real data. It appears to spin up a separate ephemeral
+  instance rather than truly shelling into the live container's filesystem. **Verify live
+  server state through the actual API instead of `railway ssh` + direct file access** — it's
+  slower per-check but the only means that's actually testing what's really running.
+- **A literal backtick anywhere inside a JS template literal ends the string, even inside a
+  SQL comment.** Writing `-- ...already embeds its own \`issuedAt\`: ...` inside a
+  `` db.exec(`...`) `` block (meant as a SQL comment) closed the JS template literal early
+  and produced a real `SyntaxError: missing ) after argument list` at server startup —
+  because JS has no concept of "inside a SQL comment," it just sees the next raw backtick
+  character. Caught immediately (every test server failed to start), but cost real time to
+  localize. Don't use backtick-quoting for identifiers in SQL comments that live inside a JS
+  template literal — plain text only.
+- **A `CREATE INDEX` on a newly-added column must never live in the same `db.exec()` batch
+  as the initial `CREATE TABLE IF NOT EXISTS`.** Adding `org_id` to `admin_actions` (Phase C)
+  included a `CREATE INDEX ... ON admin_actions(org_id)` right after the `CREATE TABLE IF NOT
+  EXISTS admin_actions (...)` statement, in the same SQL batch. Against a *fresh* database
+  this is fine — the table is created with `org_id` already present. Against an *existing*
+  database (i.e., actual production, which already had `admin_actions` from before this
+  column existed), `CREATE TABLE IF NOT EXISTS` is a silent no-op, so the table still lacks
+  `org_id` — and the `CREATE INDEX` in that same batch then fails with `no such column:
+  org_id`, **before** the later `ALTER TABLE ... ADD COLUMN` migration code ever gets a
+  chance to run. This was caught by explicitly testing the migration against a hand-built
+  database matching production's real (pre-migration) shape before deploying — worth doing
+  that for every future schema change here, not just trusting `CREATE TABLE IF NOT EXISTS`
+  to be harmless. Fix: any index on a newly-added column goes *after* the migration that adds
+  the column, never bundled with the initial schema statement.
+
 ## RESOLVED: Session ratchet — verified end-to-end on real hardware (2026-08-05)
 
 **Update, later the same day:** the blocker below (Achilles iPhone Air stuck at
