@@ -75,6 +75,7 @@ bool ratchet_run_exchange(const uint8_t phonePublicKey[32], RatchetExchangeResul
     uint8_t nextProof[32];
     hmac<SHA512>(nextProof, sizeof(nextProof), sharedSecret, sizeof(sharedSecret), NEXT_PROOF_CONTEXT, strlen(NEXT_PROOF_CONTEXT));
     memset(sharedSecret, 0, sizeof(sharedSecret));
+    memcpy(out->nextProof, nextProof, sizeof(nextProof));
 
     store_next_proof(nextProof);
     ESP_LOGI(TAG, "Ratchet state advanced for the next session.");

@@ -11,7 +11,7 @@ import { grantGitAccess, parseBasicAuth, validateGitCredentials, revokeGitAccess
 import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
 import { getIdentity, resetIdentity } from './auth/identity-admin.js';
 import { logAdminAction, getAdminActionLog } from './audit/log.js';
-import { isValidRatchetStatus, recordRatchetStatus, getRatchetState, clearRatchetState } from './auth/ratchet.js';
+import { isValidRatchetStatus, recordRatchetStatus, getRatchetState, clearRatchetState, verifyAndRecordRatchetAttestation } from './auth/ratchet.js';
 import {
   createOrganization, getOrganization, getMembership, listMembers, addMember, removeMember,
   getDeviceOrg, listOrgDevices, addDeviceToOrg, removeDeviceFromOrg,
@@ -208,7 +208,7 @@ app.post('/auth/phone/verify', authRateLimit, honeypotLogger, async (req, res) =
 // Device verify
 app.post('/auth/device/verify', authRateLimit, honeypotLogger, async (req, res) => {
   try {
-    const { deviceChallengeId, deviceSignature, deviceId, publicKey, ratchetStatus } = req.body;
+    const { deviceChallengeId, deviceSignature, deviceId, publicKey, ratchetStatus, ratchetAttestation } = req.body;
     const stored = activeChallenges.get(deviceChallengeId);
 
     if (!stored || stored.stage !== 'device_verification') {
@@ -239,20 +239,30 @@ app.post('/auth/device/verify', authRateLimit, honeypotLogger, async (req, res) 
       return res.status(403).json({ error: 'This phone is not authorized to use this device' });
     }
 
-    // Session-ratchet continuity result (see the security-layers plan). Backend-only
-    // plumbing for now: the firmware doesn't compute or sign this yet (that's the Phase 3
-    // X25519/HKDF work), so this is currently phone-reported, not device-attested — same
-    // honest limitation the liveness layer has until App Attest exists. v1 is deliberately
-    // warn-not-block: a mismatch is logged, not rejected, given how costly false lockouts
-    // from state desync have already been this session (identity TOFU, BLE bonds).
-    if (ratchetStatus !== undefined) {
-      if (!isValidRatchetStatus(ratchetStatus)) {
-        activateHoneypot(getClientIp(req), 'Malformed ratchetStatus value', { deviceId, ratchetStatus });
-      } else {
+    // Session-ratchet continuity result (see the security-layers plan). The device signs
+    // the exchange output with its existing Ed25519 identity key, bound to this session's
+    // challenge — the backend verifies that signature and computes the verdict itself
+    // (verifyAndRecordRatchetAttestation), rather than trusting a client-reported string.
+    // Still deliberately warn-not-block: a mismatch is logged, not rejected, given how
+    // costly false lockouts from state desync have already been this project (identity
+    // TOFU, BLE bonds) — that policy is unchanged, only the trustworthiness of the signal
+    // driving it.
+    if (ratchetAttestation && typeof ratchetAttestation === 'object') {
+      const result = verifyAndRecordRatchetAttestation(deviceId, stored.challenge, ratchetAttestation);
+      if (!result.ok) {
+        activateHoneypot(getClientIp(req), `Ratchet attestation invalid: ${result.reason}`, { deviceId });
+      } else if (result.verdict === 'mismatch') {
+        activateHoneypot(getClientIp(req), 'Ratchet continuity mismatch — possible cloned device identity', { deviceId });
+      }
+    } else if (ratchetStatus !== undefined) {
+      // Legacy path: a bare, unsigned status string with no cryptographic verification —
+      // kept only for the transition window while firmware/app on some boards may not be
+      // upgraded yet. Never drives the honeypot and is never treated as a verified claim;
+      // see recordRatchetStatus's own doc comment.
+      if (isValidRatchetStatus(ratchetStatus)) {
         recordRatchetStatus(deviceId, ratchetStatus);
-        if (ratchetStatus === 'mismatch') {
-          activateHoneypot(getClientIp(req), 'Ratchet continuity mismatch — possible cloned device identity', { deviceId });
-        }
+      } else {
+        activateHoneypot(getClientIp(req), 'Malformed ratchetStatus value', { deviceId, ratchetStatus });
       }
     }
 

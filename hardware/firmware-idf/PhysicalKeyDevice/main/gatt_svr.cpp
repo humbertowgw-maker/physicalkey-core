@@ -12,12 +12,18 @@
 #include "host/ble_uuid.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "mbedtls/sha256.h"
 
 #include "Ed25519.h"
 #include "identity.h"
 #include "ratchet.h"
 
 static const char *TAG = "gatt_svr";
+
+// Fixed context string for the ratchet attestation signature (see access_ratchet_pubkey
+// below), not a secret — same role as ratchet.cpp's own NEXT_PROOF_CONTEXT, just domain-
+// separating this signed message from anything else this Ed25519 key ever signs.
+static const char *RATCHET_ATTEST_CONTEXT = "physicalkey-ratchet-attest-v1";
 
 // Same 5 UUIDs as the Arduino firmware (b16a3c00.. through b16a3c04.., base
 // 2c1e-4a7a-9b7a-0a1c2d3e4f50), reversed into NimBLE's little-endian byte order.
@@ -43,11 +49,23 @@ static const ble_uuid128_t chr_ratchet_response_uuid =
 static uint16_t signature_val_handle;
 static uint8_t signature[64];
 
+// The most recently-written Challenge value this connection, and its length — cached so the
+// ratchet attestation (access_ratchet_pubkey below) can bind its signature to the same
+// backend challenge the primary deviceSignature already covers. Cleared on disconnect
+// (gatt_svr_clear_challenge_cache, called from main.cpp) so a captured attestation from one
+// connection can never be replayed as if it belonged to another.
+static uint8_t g_lastChallenge[256];
+static size_t g_lastChallengeLen = 0;
+
 static uint16_t ratchet_response_val_handle;
-// Wire layout: devicePublicKey(32) || rc(16) || deviceProof(64) || status(1) = 113 bytes.
-// Larger than the default 23-byte ATT MTU, same as it already is for other reads here —
-// NimBLE handles the multi-part ATT Read Blob transparently, nothing extra needed.
-static uint8_t ratchet_response_wire[32 + 16 + 64 + 1];
+// Wire layout: devicePublicKey(32) || rc(16) || deviceProof(64) || nextProof(32) ||
+// status(1) || ratchetSig(64) = 209 bytes. ratchetSig is this device's existing Ed25519
+// identity key signing RATCHET_ATTEST_CONTEXT || SHA256(challenge) || everything before it
+// in this buffer — the backend independently verifies it (see backend/auth/ratchet.js)
+// instead of trusting whatever the phone app reports. Larger than the default 23-byte ATT
+// MTU, same as it already was at 113 bytes — see main.cpp's explicit
+// ble_att_set_preferred_mtu() call, raised specifically to give this room.
+static uint8_t ratchet_response_wire[32 + 16 + 64 + 32 + 1 + 64];
 
 static int access_public_key(uint16_t conn_handle, uint16_t attr_handle,
                               struct ble_gatt_access_ctxt *ctxt, void *arg) {
@@ -83,12 +101,22 @@ static int access_challenge(uint16_t conn_handle, uint16_t attr_handle,
 
     Ed25519::sign(signature, g_privateKey, g_publicKey, challenge, copied);
 
+    // Cache this exact challenge so a subsequent ratchet exchange this connection can bind
+    // its attestation signature to it (see access_ratchet_pubkey and
+    // gatt_svr_clear_challenge_cache).
+    memcpy(g_lastChallenge, challenge, copied);
+    g_lastChallengeLen = copied;
+
     // Notify any subscribed central (mirrors the Arduino version's explicit
     // signatureCharacteristic->notify() call after setValue()).
     ble_gatts_chr_updated(signature_val_handle);
 
     ESP_LOGI(TAG, "Signed and notified.");
     return 0;
+}
+
+void gatt_svr_clear_challenge_cache(void) {
+    g_lastChallengeLen = 0;
 }
 
 static int access_signature(uint16_t conn_handle, uint16_t attr_handle,
@@ -99,8 +127,9 @@ static int access_signature(uint16_t conn_handle, uint16_t attr_handle,
 
 // Phone writes its fresh 32-byte X25519 ephemeral public key here; the device runs its
 // half of the exchange synchronously (same write-triggers-computation pattern as
-// access_challenge above) and makes the result available via RatchetResponse's notify,
-// same as Challenge -> Signature.
+// access_challenge above), signs the result with its existing Ed25519 identity key so the
+// backend can independently verify it, and makes the whole attestation available via
+// RatchetResponse's notify, same as Challenge -> Signature.
 static int access_ratchet_pubkey(uint16_t conn_handle, uint16_t attr_handle,
                                   struct ble_gatt_access_ctxt *ctxt, void *arg) {
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
@@ -108,6 +137,13 @@ static int access_ratchet_pubkey(uint16_t conn_handle, uint16_t attr_handle,
     }
     if (OS_MBUF_PKTLEN(ctxt->om) != 32) {
         return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    if (g_lastChallengeLen == 0) {
+        // Enforces the same order the app already uses (sign(challenge:) before
+        // runRatchetExchange in AuthViewModel.connectAndAuthenticateDevice) — without a
+        // cached challenge there's nothing for the attestation signature to bind to.
+        ESP_LOGW(TAG, "Ratchet exchange attempted before a challenge was signed this connection.");
+        return BLE_ATT_ERR_UNLIKELY;
     }
 
     uint8_t phonePublicKey[32];
@@ -124,14 +160,35 @@ static int access_ratchet_pubkey(uint16_t conn_handle, uint16_t attr_handle,
         return BLE_ATT_ERR_UNLIKELY;
     }
 
+    // RATCHET_ATTEST_CONTEXT || SHA256(challenge) || devicePublicKey || rc || deviceProof ||
+    // nextProof || status — must match backend/auth/ratchet.js's message construction
+    // exactly, byte for byte.
+    uint8_t challengeHash[32];
+    mbedtls_sha256(g_lastChallenge, g_lastChallengeLen, challengeHash, 0 /* SHA-256, not SHA-224 */);
+
+    uint8_t attestMsg[strlen(RATCHET_ATTEST_CONTEXT) + 32 + 32 + 16 + 64 + 32 + 1];
+    uint8_t *m = attestMsg;
+    memcpy(m, RATCHET_ATTEST_CONTEXT, strlen(RATCHET_ATTEST_CONTEXT)); m += strlen(RATCHET_ATTEST_CONTEXT);
+    memcpy(m, challengeHash, sizeof(challengeHash)); m += sizeof(challengeHash);
+    memcpy(m, result.devicePublicKey, 32); m += 32;
+    memcpy(m, result.rc, 16); m += 16;
+    memcpy(m, result.deviceProof, 64); m += 64;
+    memcpy(m, result.nextProof, 32); m += 32;
+    *m = result.status;
+
+    uint8_t ratchetSig[64];
+    Ed25519::sign(ratchetSig, g_privateKey, g_publicKey, attestMsg, sizeof(attestMsg));
+
     uint8_t *w = ratchet_response_wire;
     memcpy(w, result.devicePublicKey, 32); w += 32;
     memcpy(w, result.rc, 16); w += 16;
     memcpy(w, result.deviceProof, 64); w += 64;
-    *w = result.status;
+    memcpy(w, result.nextProof, 32); w += 32;
+    *w = result.status; w += 1;
+    memcpy(w, ratchetSig, 64);
 
     ble_gatts_chr_updated(ratchet_response_val_handle);
-    ESP_LOGI(TAG, "Ratchet exchange complete and notified.");
+    ESP_LOGI(TAG, "Ratchet exchange complete, attested, and notified.");
     return 0;
 }
 

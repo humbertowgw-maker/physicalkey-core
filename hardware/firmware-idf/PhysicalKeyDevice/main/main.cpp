@@ -83,6 +83,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
 
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(TAG, "disconnect; reason=%d", event->disconnect.reason);
+            gatt_svr_clear_challenge_cache();
             start_advertising();
             return 0;
 
@@ -173,6 +174,12 @@ static void on_reset(int reason) {
 }
 
 static void on_sync(void) {
+    // RatchetResponse notifies 209 bytes (up from 113 before the signed-attestation fix) —
+    // above what the default negotiated MTU reliably guarantees. Requesting the max legal
+    // ATT MTU here gives real headroom; NimBLE and the connecting central still negotiate
+    // down to whatever's actually supported on both ends.
+    ble_att_set_preferred_mtu(247);
+
     int rc = ble_hs_util_ensure_addr(0);
     assert(rc == 0);
 

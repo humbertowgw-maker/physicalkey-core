@@ -97,14 +97,14 @@ final class AuthViewModel: ObservableObject {
                 let signature = try await bluetooth.sign(challenge: deviceChallenge)
                 log("Device signed the challenge")
 
-                let ratchetVerdict = await runRatchetCheck(deviceId: identity.deviceId)
+                let ratchetOutcome = await runRatchetCheck(deviceId: identity.deviceId)
 
                 let verified = try await api.deviceVerify(
                     deviceChallengeId: deviceChallengeId,
                     deviceSignature: signature,
                     deviceId: identity.deviceId,
                     publicKeyB64: identity.publicKeyB64,
-                    ratchetStatus: ratchetVerdict?.rawValue
+                    ratchetAttestation: ratchetOutcome?.attestation
                 )
                 log("Device verified. Full access granted.")
 
@@ -147,11 +147,11 @@ final class AuthViewModel: ObservableObject {
     /// device. Never throws — a board whose firmware doesn't have the ratchet
     /// characteristics yet (or any other transport hiccup) just means no verdict is
     /// reported, same "auxiliary signal, never blocks real auth" rule as liveness.
-    private func runRatchetCheck(deviceId: String) async -> RatchetVerdict? {
+    private func runRatchetCheck(deviceId: String) async -> RatchetOutcome? {
         do {
-            let verdict = try await RatchetManager.shared.runExchange(deviceId: deviceId, bluetooth: bluetooth)
-            log("Ratchet check: \(verdict.rawValue)")
-            return verdict
+            let outcome = try await RatchetManager.shared.runExchange(deviceId: deviceId, bluetooth: bluetooth)
+            log("Ratchet check: \(outcome.verdict.rawValue) (backend verifies independently)")
+            return outcome
         } catch {
             log("Ratchet check unavailable: \(error)")
             return nil

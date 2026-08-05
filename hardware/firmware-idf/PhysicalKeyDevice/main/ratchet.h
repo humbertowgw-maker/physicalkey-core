@@ -14,6 +14,12 @@ struct RatchetExchangeResult {
     uint8_t devicePublicKey[32];
     uint8_t rc[16];             // random nonce for this session's HMAC proof, unused if bootstrap
     uint8_t deviceProof[64];    // HMAC-SHA512(priorNextProof, rc) — zeroed if bootstrap
+    uint8_t nextProof[32];      // HMAC-SHA512(sharedSecret, context)[:32] — same value just persisted
+                                 // to NVS for next session, surfaced here so gatt_svr.cpp can include
+                                 // it in the Ed25519-signed attestation the backend independently
+                                 // verifies. The raw X25519 shared secret itself never leaves
+                                 // ratchet_run_exchange() — this is a one-way derivative of it, not
+                                 // the secret.
     uint8_t status;             // 0 = bootstrap (no prior stored state), 1 = has prior state
 };
 

@@ -114,11 +114,39 @@ db.exec(`
   -- 'mismatch' is the only value worth acting on: both sides had prior state and it disagreed.
   -- v1 is warn-not-block by design — see identity-admin.js's clearRatchetState for the escape
   -- hatch when a mismatch turns out to be a false positive rather than a real clone.
+  -- 'next_proof' is the backend's own mirrored copy of the HMAC chain, needed so the backend
+  -- computes the verdict itself (see auth/ratchet.js's verifyAndRecordRatchetAttestation)
+  -- instead of trusting a client-reported string. 'unverifiable' covers a device that claims
+  -- continuation but has no next_proof on file yet — e.g. its first session after this
+  -- column was introduced — which is a migration gap, not a real mismatch.
   CREATE TABLE IF NOT EXISTS ratchet_state (
     device_id TEXT PRIMARY KEY,
-    status TEXT NOT NULL CHECK (status IN ('bootstrap', 'verified', 'mismatch')),
+    status TEXT NOT NULL CHECK (status IN ('bootstrap', 'verified', 'mismatch', 'unverifiable')),
+    next_proof TEXT,
+    verified_by TEXT NOT NULL DEFAULT 'server',
     updated_at INTEGER NOT NULL
   );
 `);
+
+// Migration for a database created before next_proof/verified_by/'unverifiable' existed
+// (CREATE TABLE IF NOT EXISTS above is a no-op against an already-existing table, so this
+// covers upgrading it in place). SQLite can't ALTER a CHECK constraint, so this rebuilds the
+// table — safe and cheap at this table's size (one row per physical device, single digits).
+const ratchetStateColumns = db.prepare("PRAGMA table_info(ratchet_state)").all().map((c) => c.name);
+if (!ratchetStateColumns.includes('next_proof')) {
+  db.exec(`
+    ALTER TABLE ratchet_state RENAME TO ratchet_state_old;
+    CREATE TABLE ratchet_state (
+      device_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL CHECK (status IN ('bootstrap', 'verified', 'mismatch', 'unverifiable')),
+      next_proof TEXT,
+      verified_by TEXT NOT NULL DEFAULT 'server',
+      updated_at INTEGER NOT NULL
+    );
+    INSERT INTO ratchet_state (device_id, status, next_proof, verified_by, updated_at)
+      SELECT device_id, status, NULL, 'server', updated_at FROM ratchet_state_old;
+    DROP TABLE ratchet_state_old;
+  `);
+}
 
 export default db;

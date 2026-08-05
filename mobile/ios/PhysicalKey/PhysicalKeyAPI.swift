@@ -201,14 +201,26 @@ struct PhysicalKeyAPI {
         return try await post("/auth/phone/verify", body: body)
     }
 
-    func deviceVerify(deviceChallengeId: String, deviceSignature: String, deviceId: String, publicKeyB64: String?, ratchetStatus: String? = nil) async throws -> DeviceVerifyResponse {
+    func deviceVerify(deviceChallengeId: String, deviceSignature: String, deviceId: String, publicKeyB64: String?, ratchetAttestation: RatchetAttestation? = nil) async throws -> DeviceVerifyResponse {
         var body: [String: Any] = [
             "deviceChallengeId": deviceChallengeId,
             "deviceSignature": deviceSignature,
             "deviceId": deviceId
         ]
         if let publicKeyB64 { body["publicKey"] = publicKeyB64 }
-        if let ratchetStatus { body["ratchetStatus"] = ratchetStatus }
+        // Field names/shape must match backend/auth/ratchet.js's verifyAndRecordRatchetAttestation
+        // exactly — this is the device-signed attestation the backend independently verifies,
+        // not a trusted client claim (see RatchetAttestation's doc comment).
+        if let ratchetAttestation {
+            body["ratchetAttestation"] = [
+                "devicePublicKey": ratchetAttestation.devicePublicKey.base64EncodedString(),
+                "rc": ratchetAttestation.rc.base64EncodedString(),
+                "deviceProof": ratchetAttestation.deviceProof.base64EncodedString(),
+                "nextProof": ratchetAttestation.nextProof.base64EncodedString(),
+                "status": Int(ratchetAttestation.status),
+                "signature": ratchetAttestation.signature.base64EncodedString()
+            ]
+        }
         return try await post("/auth/device/verify", body: body)
     }
 

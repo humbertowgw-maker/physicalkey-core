@@ -10,7 +10,6 @@ COPY auth ./auth
 COPY audit ./audit
 COPY git ./git
 COPY honeypot ./honeypot
-COPY access ./access
 COPY lib ./lib
 
 # Persistent volume mounts here in production (see railway volume config) so the
