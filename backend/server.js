@@ -11,6 +11,7 @@ import { grantGitAccess, parseBasicAuth, validateGitCredentials } from './git/gi
 import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
 import { getIdentity, resetIdentity } from './auth/identity-admin.js';
 import { logAdminAction, getAdminActionLog } from './audit/log.js';
+import { isValidRatchetStatus, recordRatchetStatus, getRatchetState, clearRatchetState } from './auth/ratchet.js';
 import {
   createOrganization, getOrganization, getMembership, listMembers, addMember, removeMember,
   getDeviceOrg, listOrgDevices, addDeviceToOrg, removeDeviceFromOrg,
@@ -187,7 +188,7 @@ app.post('/auth/phone/verify', authRateLimit, honeypotLogger, async (req, res) =
 // Device verify
 app.post('/auth/device/verify', authRateLimit, honeypotLogger, async (req, res) => {
   try {
-    const { deviceChallengeId, deviceSignature, deviceId, publicKey } = req.body;
+    const { deviceChallengeId, deviceSignature, deviceId, publicKey, ratchetStatus } = req.body;
     const stored = activeChallenges.get(deviceChallengeId);
 
     if (!stored || stored.stage !== 'device_verification') {
@@ -216,6 +217,23 @@ app.post('/auth/device/verify', authRateLimit, honeypotLogger, async (req, res) 
     if (!isAuthorizedForDevice(deviceId, stored.phoneAttestation.deviceId)) {
       activateHoneypot(getClientIp(req), 'Phone not authorized for this org device', { deviceId, phoneDeviceId: stored.phoneAttestation.deviceId });
       return res.status(403).json({ error: 'This phone is not authorized to use this device' });
+    }
+
+    // Session-ratchet continuity result (see the security-layers plan). Backend-only
+    // plumbing for now: the firmware doesn't compute or sign this yet (that's the Phase 3
+    // X25519/HKDF work), so this is currently phone-reported, not device-attested — same
+    // honest limitation the liveness layer has until App Attest exists. v1 is deliberately
+    // warn-not-block: a mismatch is logged, not rejected, given how costly false lockouts
+    // from state desync have already been this session (identity TOFU, BLE bonds).
+    if (ratchetStatus !== undefined) {
+      if (!isValidRatchetStatus(ratchetStatus)) {
+        activateHoneypot(getClientIp(req), 'Malformed ratchetStatus value', { deviceId, ratchetStatus });
+      } else {
+        recordRatchetStatus(deviceId, ratchetStatus);
+        if (ratchetStatus === 'mismatch') {
+          activateHoneypot(getClientIp(req), 'Ratchet continuity mismatch — possible cloned device identity', { deviceId });
+        }
+      }
     }
 
     // Short-lived deliberately: this token isn't persisted client-side (AuthViewModel
@@ -451,7 +469,7 @@ app.get('/admin/identities/:deviceId', requireAdmin, (req, res) => {
   if (!identity) {
     return res.status(404).json({ error: 'No identity registered for this deviceId' });
   }
-  res.json(identity);
+  res.json({ ...identity, ratchet: getRatchetState(req.params.deviceId) });
 });
 
 // Resets one deviceId's trust-on-first-use registration, so its NEXT auth attempt
@@ -467,9 +485,18 @@ app.delete('/admin/identities/:deviceId', requireAdmin, (req, res) => {
   if (!removed) {
     return res.status(404).json({ error: 'No identity registered for this deviceId' });
   }
+  // Also clears session-ratchet continuity state, if any — the escape hatch called for in
+  // the security-layers plan. A ratchet mismatch that turns out to be a false positive (or a
+  // deliberate re-pair) shouldn't need a second, different admin operation to clear; it's
+  // the same "this deviceId starts fresh" action as an identity reset already is.
+  const clearedRatchet = clearRatchetState(req.params.deviceId);
   console.log(`⚠ Admin reset identity: ${req.params.deviceId} (was kind=${removed.kind}, registered_at=${removed.registered_at})`);
-  logAdminAction(req.deviceId, 'identity_reset', req.params.deviceId, { kind: removed.kind, registeredAt: removed.registered_at });
-  res.json({ status: 'reset', deviceId: req.params.deviceId, previousKind: removed.kind });
+  logAdminAction(req.deviceId, 'identity_reset', req.params.deviceId, {
+    kind: removed.kind,
+    registeredAt: removed.registered_at,
+    clearedRatchetStatus: clearedRatchet?.status ?? null
+  });
+  res.json({ status: 'reset', deviceId: req.params.deviceId, previousKind: removed.kind, clearedRatchetStatus: clearedRatchet?.status ?? null });
 });
 
 // Durable log of admin actions (currently: identity resets) — who did what, to which

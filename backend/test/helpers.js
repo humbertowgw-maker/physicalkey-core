@@ -113,8 +113,11 @@ export async function phoneAuth(baseUrl, deviceId, phoneKeys) {
   return verifyBody; // { deviceChallengeId, deviceChallenge }
 }
 
-/** Runs a full phone+device auth flow, returning the resulting session token. */
-export async function fullAuth(baseUrl, phoneDeviceId, phoneKeys, hardwareDeviceId, deviceKeys) {
+/**
+ * Runs a full phone+device auth flow, returning the resulting session token.
+ * `extra` merges additional fields into the /auth/device/verify body — e.g. { ratchetStatus }.
+ */
+export async function fullAuth(baseUrl, phoneDeviceId, phoneKeys, hardwareDeviceId, deviceKeys, extra = {}) {
   const { deviceChallengeId, deviceChallenge } = await phoneAuth(baseUrl, phoneDeviceId, phoneKeys);
 
   const deviceSignature = sign(deviceKeys.privateKey, deviceChallenge);
@@ -125,7 +128,8 @@ export async function fullAuth(baseUrl, phoneDeviceId, phoneKeys, hardwareDevice
       deviceChallengeId,
       deviceSignature,
       deviceId: hardwareDeviceId,
-      publicKey: deviceKeys.publicKeyB64
+      publicKey: deviceKeys.publicKeyB64,
+      ...extra
     })
   });
   const body = await res.json();

@@ -107,6 +107,18 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_admin_actions_timestamp ON admin_actions(timestamp);
+
+  -- Session-ratchet continuity state (see the security-layers plan) for a device that's
+  -- reported a ratchet result at least once. Absence of a row here is NOT a signal — it just
+  -- means bootstrap (first session, or state was legitimately lost to a re-flash/reinstall).
+  -- 'mismatch' is the only value worth acting on: both sides had prior state and it disagreed.
+  -- v1 is warn-not-block by design — see identity-admin.js's clearRatchetState for the escape
+  -- hatch when a mismatch turns out to be a false positive rather than a real clone.
+  CREATE TABLE IF NOT EXISTS ratchet_state (
+    device_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK (status IN ('bootstrap', 'verified', 'mismatch')),
+    updated_at INTEGER NOT NULL
+  );
 `);
 
 export default db;
