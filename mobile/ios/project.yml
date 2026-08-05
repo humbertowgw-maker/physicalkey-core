@@ -31,5 +31,6 @@ targets:
         UILaunchScreen: {}
         NSFaceIDUsageDescription: "PhysicalKey uses Face ID to authenticate your identity."
         NSBluetoothAlwaysUsageDescription: "PhysicalKey uses Bluetooth to connect to your physical key device."
+        NSMicrophoneUsageDescription: "PhysicalKey uses the microphone to verify a live audio handshake during authentication."
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

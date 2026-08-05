@@ -40,6 +40,15 @@ struct ContentView: View {
                         }
                     }
                 }
+                #if DEBUG
+                // Phase 0 spike only — not part of the real auth flow. See the
+                // security-layers plan and LivenessSpike.swift.
+                ToolbarItem(placement: .navigationBarLeading) {
+                    NavigationLink("Spike") {
+                        LivenessSpikeView()
+                    }
+                }
+                #endif
             }
         }
         .onAppear { viewModel.onAppear() }
