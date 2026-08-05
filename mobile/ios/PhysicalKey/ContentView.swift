@@ -112,7 +112,7 @@ struct ContentView: View {
         case .phoneVerifying, .connectingToDevice:
             ProgressView()
         case .phoneVerified:
-            Button("RATCHET-BUILD-CHECK-9F2 · Connect to Key Device") { viewModel.connectAndAuthenticateDevice() }
+            Button("Connect to Key Device") { viewModel.connectAndAuthenticateDevice() }
                 .buttonStyle(.borderedProminent)
         case .authenticated:
             EmptyView()

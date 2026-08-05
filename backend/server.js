@@ -209,10 +209,6 @@ app.post('/auth/phone/verify', authRateLimit, honeypotLogger, async (req, res) =
 app.post('/auth/device/verify', authRateLimit, honeypotLogger, async (req, res) => {
   try {
     const { deviceChallengeId, deviceSignature, deviceId, publicKey, ratchetStatus } = req.body;
-    // Temporary diagnostic — the app is meant to include ratchetStatus but it's not
-    // showing up anywhere server-side; logging the raw field to see what the client is
-    // actually sending, if anything.
-    console.log(`[ratchet-debug] deviceId=${deviceId} ratchetStatus=${JSON.stringify(ratchetStatus)} bodyKeys=${Object.keys(req.body).join(',')}`);
     const stored = activeChallenges.get(deviceChallengeId);
 
     if (!stored || stored.stage !== 'device_verification') {
