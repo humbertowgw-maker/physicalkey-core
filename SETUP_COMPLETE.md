@@ -1,12 +1,35 @@
 # PhysicalKey Local Backend Setup — Results
 
-## HANDOFF: Session ratchet — code complete, real-device verification still needed (2026-08-05)
+## RESOLVED: Session ratchet — verified end-to-end on real hardware (2026-08-05)
 
-**Read this whole section before doing anything else.** This is a mid-feature handoff — the
-code exists and compiles/deploys, but the one thing that hasn't been confirmed is whether
-it actually works end-to-end on a real phone + real board. A long previous session burned
-significant time on device/tooling confusion (documented below) without resolving that
-confirmation, not because of a known code bug.
+**Update, later the same day:** the blocker below (Achilles iPhone Air stuck at
+`ddiServicesAvailable: false` / `tunnelState: unavailable`) turned out to be exactly what it
+looked like — a stale device connection, not a code or signing problem. A fresh unlock +
+cable + Trust cycle brought the tunnel up clean (`ddiServicesAvailable: true`,
+`tunnelState: connected`) on the first attempt. From there:
+
+- Built and installed via `xcodebuild ... -destination 'id=00008150-001444890E92401C'`
+  (explicit classic UDID, not by name), signed automatically with the
+  `achilleszepeda@icloud.com` identity, one-time developer-profile trust on the phone.
+- **First real connection to the spare board** (`physicalkey-device-680947e00800`) logged
+  `[ratchet-debug] ... ratchetStatus="bootstrap"` — correct, expected result for a first-ever
+  pairing.
+- **Second connection** logged `ratchetStatus="verified"` — proof the ratchet chains forward
+  correctly session-to-session, the actual thing this feature needed to demonstrate.
+- The three temporary debug aids (button label, `AuthViewModel`'s debug-error passthrough,
+  backend `console.log`) were reverted, `npm test` passes 46/46, backend redeployed to
+  Railway and health-checked live, iOS rebuild confirmed clean, all committed and pushed
+  (`debea05`).
+
+The rest of this section is kept as-is below as a troubleshooting record — the device/tooling
+issues it documents are still real and can recur with other phones/boards on this project.
+
+**Original handoff, written before the above was resolved:**
+
+This was a mid-feature handoff — the code existed and compiled/deployed, but the one thing
+that hadn't been confirmed was whether it actually worked end-to-end on a real phone + real
+board. A long previous session burned significant time on device/tooling confusion
+(documented below) without resolving that confirmation, not because of a known code bug.
 
 ### What this feature is
 
@@ -67,10 +90,9 @@ a board erase) — treating absence-of-state as suspicious would recreate that c
 3. **iOS** — `mobile/ios/PhysicalKey/RatchetManager.swift` (new), changes in
    `DeviceBluetoothManager.swift` (2 new characteristics, `runRatchetExchange` method) and
    `AuthViewModel.swift` (wired into `connectAndAuthenticateDevice`, runs right after the
-   existing device-signature step). **Compiles clean.** **NOT YET CONFIRMED RUNNING on a
-   real phone** — every attempt to verify this got blocked by device/tooling issues (next
-   section), not a known Swift bug. Don't assume it's broken; don't assume it works either
-   — find out first.
+   existing device-signature step). **Compiles clean. Confirmed running on a real phone**
+   (Achilles iPhone Air) as of the 2026-08-05 update above — `bootstrap` then `verified`
+   across two real connections to the spare board.
 
 ### The actual blocker: device/tooling confusion, not (necessarily) a code bug
 
@@ -122,12 +144,11 @@ achieved.
   don't repeat with `idf.py flash` instead of `idf.py -p <port> encrypted-flash` on an
   already-encrypted board.
 
-### Temporary debug code — still in place, uncommitted-turned-committed for safety
+### Temporary debug code — reverted as of the 2026-08-05 update above (commit `debea05`)
 
-To make this handoff safe (nothing at risk of being lost), these were **committed as-is**
-rather than left uncommitted — they are debugging aids, not shipped behavior, and should be
-reverted once a real device-verification run actually succeeds or fails with a genuine
-error:
+Left here for historical context only; these no longer reflect the current code. They were
+**committed as-is** at the time so nothing was at risk of being lost, then reverted once a
+real device-verification run succeeded:
 
 - `mobile/ios/PhysicalKey/ContentView.swift`: the "Connect to Key Device" button's label
   was changed to `"RATCHET-BUILD-CHECK-9F2 · Connect to Key Device"` — a build-freshness
