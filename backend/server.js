@@ -9,8 +9,8 @@ import { validatePhoneAttestation } from './auth/phone-auth.js';
 import { validateDeviceSignature, registerDevice } from './auth/device-auth.js';
 import { grantGitAccess, parseBasicAuth, validateGitCredentials, revokeGitAccess } from './git/git-credentials.js';
 import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
-import { getIdentity, resetIdentity } from './auth/identity-admin.js';
-import { logAdminAction, getAdminActionLog } from './audit/log.js';
+import { getIdentity, resetIdentity, revokeSessionsIssuedBefore, isSessionRevoked } from './auth/identity-admin.js';
+import { logAdminAction, getAdminActionLog, getOrgActionLog } from './audit/log.js';
 import { isValidRatchetStatus, recordRatchetStatus, getRatchetState, clearRatchetState, verifyAndRecordRatchetAttestation } from './auth/ratchet.js';
 import {
   createOrganization, getOrganization, getMembership, listMembers, addMember, removeMember,
@@ -303,6 +303,13 @@ const requireAuth = (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, SECRET_KEY, { algorithms: ['HS256'] });
+    // A full_access token embeds both the key device's identity and the phone's — an admin
+    // reset of EITHER one (e.g. a stolen phone, or a device whose key was cloned) must kill
+    // any session already minted with it, not just block future re-registration.
+    if (isSessionRevoked(decoded.deviceId, decoded.issuedAt) || isSessionRevoked(decoded.phoneAttestation?.deviceId, decoded.issuedAt)) {
+      activateHoneypot(getClientIp(req), 'Revoked session token used', { deviceId: decoded.deviceId });
+      return res.status(401).json({ error: 'Session revoked' });
+    }
     req.deviceId = decoded.deviceId;
     next();
   } catch (error) {
@@ -334,6 +341,10 @@ const requirePhoneSession = (req, res, next) => {
     const decoded = jwt.verify(token, SECRET_KEY, { algorithms: ['HS256'] });
     if (decoded.scope !== 'phone_session') {
       return res.status(401).json({ error: 'Invalid session for this operation' });
+    }
+    if (isSessionRevoked(decoded.phoneDeviceId, decoded.issuedAt)) {
+      activateHoneypot(getClientIp(req), 'Revoked session token used', { phoneDeviceId: decoded.phoneDeviceId });
+      return res.status(401).json({ error: 'Session revoked' });
     }
     req.phoneDeviceId = decoded.phoneDeviceId;
     next();
@@ -390,6 +401,7 @@ app.post('/orgs/:orgId/members', requirePhoneSession, requireOrgAdmin, (req, res
     return res.status(400).json({ error: "role must be 'admin' or 'member'" });
   }
   const member = addMember(req.params.orgId, deviceId, role || 'member');
+  logAdminAction(req.phoneDeviceId, 'member_added', deviceId, { role: role || 'member' }, req.params.orgId);
   res.status(201).json(member);
 });
 
@@ -400,6 +412,7 @@ app.delete('/orgs/:orgId/members/:deviceId', requirePhoneSession, requireOrgAdmi
     return res.status(409).json({ error: 'Cannot remove the org owner — there is no ownership-transfer flow yet' });
   }
   const result = removeMember(req.params.orgId, req.params.deviceId);
+  logAdminAction(req.phoneDeviceId, 'member_removed', req.params.deviceId, { previousRole: membership.role }, req.params.orgId);
   res.json(result);
 });
 
@@ -412,6 +425,7 @@ app.post('/orgs/:orgId/devices', requirePhoneSession, requireOrgAdmin, (req, res
   }
   try {
     const orgDevice = addDeviceToOrg(req.params.orgId, deviceId);
+    logAdminAction(req.phoneDeviceId, 'device_added_to_org', deviceId, {}, req.params.orgId);
     res.status(201).json(orgDevice);
   } catch (error) {
     res.status(409).json({ error: error.message });
@@ -424,6 +438,7 @@ app.delete('/orgs/:orgId/devices/:deviceId', requirePhoneSession, requireOrgAdmi
     return res.status(404).json({ error: 'This device does not belong to this org' });
   }
   const result = removeDeviceFromOrg(req.params.deviceId);
+  logAdminAction(req.phoneDeviceId, 'device_removed_from_org', req.params.deviceId, {}, req.params.orgId);
   res.json(result);
 });
 
@@ -440,6 +455,7 @@ app.post('/orgs/:orgId/devices/:deviceId/access', requirePhoneSession, requireOr
   if (!memberDeviceId) return res.status(400).json({ error: 'memberDeviceId is required' });
   try {
     grantDeviceAccess(req.params.orgId, req.params.deviceId, memberDeviceId);
+    logAdminAction(req.phoneDeviceId, 'device_access_granted', req.params.deviceId, { memberDeviceId }, req.params.orgId);
     res.status(201).json({ status: 'granted' });
   } catch (error) {
     res.status(409).json({ error: error.message });
@@ -448,7 +464,16 @@ app.post('/orgs/:orgId/devices/:deviceId/access', requirePhoneSession, requireOr
 
 app.delete('/orgs/:orgId/devices/:deviceId/access/:memberDeviceId', requirePhoneSession, requireOrgAdmin, (req, res) => {
   revokeDeviceAccess(req.params.orgId, req.params.deviceId, req.params.memberDeviceId);
+  logAdminAction(req.phoneDeviceId, 'device_access_revoked', req.params.deviceId, { memberDeviceId: req.params.memberDeviceId }, req.params.orgId);
   res.json({ status: 'revoked' });
+});
+
+// Org-scoped view of the same admin_actions log /admin/audit-log exposes globally — lets
+// an org's own owner/admin see their org's membership/device-access history without
+// needing the single global admin device's credentials, which is otherwise the only thing
+// that can see any of this today.
+app.get('/orgs/:orgId/audit-log', requirePhoneSession, requireOrgAdmin, (req, res) => {
+  res.json({ entries: getOrgActionLog(req.params.orgId) });
 });
 
 // Git access validation — callback endpoint a git server (e.g. Gitea) hits with the
@@ -524,14 +549,19 @@ app.delete('/admin/identities/:deviceId', requireAdmin, (req, res) => {
   // device+phone pair keeps working git access for up to 24h after the identity that
   // authorized it has been reset, which defeats the point of an incident-response action.
   const revokedGitAccess = revokeGitAccess(req.params.deviceId);
+  // And kills any session token already minted for this deviceId, not just future
+  // re-registration — a JWT that hasn't naturally expired yet would otherwise keep working
+  // for up to its full 1h lifetime after the identity backing it was just reset.
+  const revokedSessionsAt = revokeSessionsIssuedBefore(req.params.deviceId);
   console.log(`⚠ Admin reset identity: ${req.params.deviceId} (was kind=${removed.kind}, registered_at=${removed.registered_at})`);
   logAdminAction(req.deviceId, 'identity_reset', req.params.deviceId, {
     kind: removed.kind,
     registeredAt: removed.registered_at,
     clearedRatchetStatus: clearedRatchet?.status ?? null,
-    revokedGitAccess
+    revokedGitAccess,
+    revokedSessionsAt
   });
-  res.json({ status: 'reset', deviceId: req.params.deviceId, previousKind: removed.kind, clearedRatchetStatus: clearedRatchet?.status ?? null, revokedGitAccess });
+  res.json({ status: 'reset', deviceId: req.params.deviceId, previousKind: removed.kind, clearedRatchetStatus: clearedRatchet?.status ?? null, revokedGitAccess, revokedSessionsAt });
 });
 
 // Durable log of admin actions (currently: identity resets) — who did what, to which

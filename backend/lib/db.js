@@ -93,20 +93,34 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_org_members_device ON organization_members(device_id);
   CREATE INDEX IF NOT EXISTS idx_device_access_device ON device_access(org_id, device_id);
 
-  -- Durable record of sensitive admin actions (currently: identity resets via
-  -- auth/identity-admin.js). Previously only console.log'd, which is lost on restart and
-  -- unqueryable — this survives both, so "who reset this deviceId, and when" is always
-  -- answerable later.
+  -- Durable record of sensitive admin actions (identity resets, and now org membership /
+  -- device-access changes too — see auth/organizations.js). Previously only console.log'd,
+  -- which is lost on restart and unqueryable — this survives both, so "who did what, and
+  -- when" is always answerable later. org_id is nullable: identity resets and other
+  -- global admin actions aren't scoped to any one org.
   CREATE TABLE IF NOT EXISTS admin_actions (
     id TEXT PRIMARY KEY,
     admin_device_id TEXT NOT NULL,
     action TEXT NOT NULL,
     target_device_id TEXT,
+    org_id TEXT,
     details TEXT NOT NULL DEFAULT '{}',
     timestamp TEXT NOT NULL
   );
 
   CREATE INDEX IF NOT EXISTS idx_admin_actions_timestamp ON admin_actions(timestamp);
+
+  -- A revocation cutoff for a given identity's already-issued session tokens. Not a
+  -- blacklist of individual tokens — a single timestamp is enough, since every JWT this
+  -- backend issues already embeds its own issuedAt: any token minted at or before this
+  -- cutoff is rejected outright by requireAuth/requirePhoneSession, even if it hasn't
+  -- naturally expired yet. Set by the identity-reset escape hatch (see
+  -- auth/identity-admin.js) so that action revokes not just future re-registration but any
+  -- session already in someone's hands.
+  CREATE TABLE IF NOT EXISTS session_revocations (
+    device_id TEXT PRIMARY KEY,
+    revoked_at INTEGER NOT NULL
+  );
 
   -- Session-ratchet continuity state (see the security-layers plan) for a device that's
   -- reported a ratchet result at least once. Absence of a row here is NOT a signal — it just
@@ -148,5 +162,16 @@ if (!ratchetStateColumns.includes('next_proof')) {
     DROP TABLE ratchet_state_old;
   `);
 }
+
+// Migration for a database created before admin_actions had org_id — a plain nullable
+// column with no constraint, so unlike ratchet_state above this doesn't need a table
+// rebuild, just an ADD COLUMN.
+const adminActionsColumns = db.prepare("PRAGMA table_info(admin_actions)").all().map((c) => c.name);
+if (!adminActionsColumns.includes('org_id')) {
+  db.exec('ALTER TABLE admin_actions ADD COLUMN org_id TEXT');
+}
+// Only safe to create once org_id is guaranteed to exist — on a fresh database this is a
+// no-op right after CREATE TABLE; on an existing one, only after the migration above.
+db.exec('CREATE INDEX IF NOT EXISTS idx_admin_actions_org ON admin_actions(org_id)');
 
 export default db;

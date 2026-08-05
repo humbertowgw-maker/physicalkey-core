@@ -23,3 +23,27 @@ export function resetIdentity(deviceId) {
   deleteIdentityStmt.run(deviceId);
   return existing;
 }
+
+// A revocation cutoff for a deviceId's already-issued session tokens (see
+// session_revocations in lib/db.js). Not a token blacklist — every JWT this backend issues
+// already embeds its own `issuedAt`, so a single stored cutoff lets requireAuth/
+// requirePhoneSession reject any token minted at or before it, even one that hasn't
+// naturally expired. Wired into the identity-reset escape hatch below, so resetting a
+// deviceId's trust also immediately kills any session already in someone's hands, not just
+// future re-registration.
+const upsertRevocationStmt = db.prepare(`
+  INSERT INTO session_revocations (device_id, revoked_at) VALUES (?, ?)
+  ON CONFLICT(device_id) DO UPDATE SET revoked_at = excluded.revoked_at
+`);
+const getRevocationStmt = db.prepare('SELECT revoked_at FROM session_revocations WHERE device_id = ?');
+
+export function revokeSessionsIssuedBefore(deviceId, cutoff = Date.now()) {
+  upsertRevocationStmt.run(deviceId, cutoff);
+  return cutoff;
+}
+
+export function isSessionRevoked(deviceId, issuedAt) {
+  if (!deviceId || typeof issuedAt !== 'number') return false;
+  const row = getRevocationStmt.get(deviceId);
+  return Boolean(row) && issuedAt <= row.revoked_at;
+}
