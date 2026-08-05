@@ -2,6 +2,12 @@ import Foundation
 
 /// Thin async/await client for the PhysicalKey backend's phone-auth endpoints.
 /// See backend/server.js for the source of truth on request/response shapes.
+/// @MainActor deliberately: every call site (AuthViewModel, OrganizationViewModel) is
+/// already MainActor-isolated, and several endpoints pass [String: Any] JSON bodies (e.g.
+/// the liveness result) that aren't Sendable — keeping this on the same actor as its only
+/// callers avoids fighting Swift 6's cross-actor sending checks for a boundary that doesn't
+/// actually exist in how this type is used.
+@MainActor
 struct PhysicalKeyAPI {
     let baseURL: URL
 
@@ -186,11 +192,13 @@ struct PhysicalKeyAPI {
         return try await post("/auth/phone/challenge", body: ["phoneAttestation": attestation])
     }
 
-    func phoneVerify(challengeId: String, signature: String) async throws -> PhoneVerifyResponse {
-        try await post("/auth/phone/verify", body: [
+    func phoneVerify(challengeId: String, signature: String, livenessResult: [String: Any]? = nil) async throws -> PhoneVerifyResponse {
+        var body: [String: Any] = [
             "challengeId": challengeId,
             "phoneSignature": signature
-        ])
+        ]
+        if let livenessResult { body["livenessResult"] = livenessResult }
+        return try await post("/auth/phone/verify", body: body)
     }
 
     func deviceVerify(deviceChallengeId: String, deviceSignature: String, deviceId: String, publicKeyB64: String?) async throws -> DeviceVerifyResponse {

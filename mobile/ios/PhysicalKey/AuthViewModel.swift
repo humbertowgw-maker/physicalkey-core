@@ -66,7 +66,10 @@ final class AuthViewModel: ObservableObject {
                 let signature = try await keyManager.sign(challenge.challenge)
                 log("Signed challenge with Face ID-gated key")
 
-                let verified = try await api.phoneVerify(challengeId: challenge.challengeId, signature: signature)
+                log("Verifying phone liveness…")
+                let livenessResult = await runLivenessChecks()
+
+                let verified = try await api.phoneVerify(challengeId: challenge.challengeId, signature: signature, livenessResult: livenessResult)
                 log("Phone verified. deviceChallengeId: \(verified.deviceChallengeId)")
 
                 phoneSessionToken = verified.phoneSessionToken
@@ -109,6 +112,32 @@ final class AuthViewModel: ObservableObject {
                 stage = .failed(Self.describe(error, action: "connect to the key device"))
             }
         }
+    }
+
+    /// Runs both liveness modalities (see LivenessSpike.swift, validated in the Phase 0
+    /// spike) concurrently and folds them into a payload for /auth/phone/verify. Never
+    /// throws — a liveness check is an auxiliary signal the backend logs but never blocks
+    /// on (warn-not-block, same reasoning as the session ratchet), so a mic-permission
+    /// denial or a noisy room must never be able to break real authentication. Returns nil
+    /// only if BOTH checks failed outright (e.g. simulator, no haptics hardware), in which
+    /// case the field is simply omitted rather than sent as empty.
+    private func runLivenessChecks() async -> [String: Any]? {
+        async let audio: AudioLoopbackResult? = try? await AudioLoopbackTester().runLoopbackTest()
+        async let haptic: HapticMotionResult? = try? await HapticMotionTester().runHapticMotionTest()
+        let (audioResult, hapticResult) = await (audio, haptic)
+
+        if audioResult == nil && hapticResult == nil { return nil }
+
+        var result: [String: Any] = [:]
+        if let audioResult {
+            result["audioDetected"] = audioResult.detected
+            result["audioSnr"] = audioResult.signalToNoiseRatio
+        }
+        if let hapticResult {
+            result["hapticMatched"] = hapticResult.matchedEvents
+            result["hapticTotal"] = hapticResult.totalEvents
+        }
+        return result
     }
 
     private func log(_ message: String) {

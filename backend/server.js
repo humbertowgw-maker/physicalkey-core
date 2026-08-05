@@ -135,7 +135,7 @@ app.post('/auth/phone/challenge', authRateLimit, honeypotLogger, (req, res) => {
 // Phone verify
 app.post('/auth/phone/verify', authRateLimit, honeypotLogger, async (req, res) => {
   try {
-    const { challengeId, phoneSignature } = req.body;
+    const { challengeId, phoneSignature, livenessResult } = req.body;
     const stored = activeChallenges.get(challengeId);
 
     if (!stored) {
@@ -154,6 +154,26 @@ app.post('/auth/phone/verify', authRateLimit, honeypotLogger, async (req, res) =
     if (!phoneValid) {
       activateHoneypot(getClientIp(req), 'Invalid phone attestation');
       return res.status(401).json({ error: 'Phone verification failed' });
+    }
+
+    // Liveness result (see the security-layers plan) — proves a real physical phone with
+    // working speaker/mic/haptics executed this session live, not an automated client
+    // replaying an extracted key. Memoryless (nothing persisted; each auth attempt is judged
+    // on its own), phone-reported only (no App Attest yet — same honest limitation as the
+    // session ratchet), and warn-not-block: a failed check is logged, never rejected, since
+    // it can fail legitimately (loud room, phone in a case) with no bearing on whether the
+    // underlying Ed25519 signature — the actual authentication — is valid.
+    if (livenessResult && typeof livenessResult === 'object') {
+      const audioFailed = livenessResult.audioDetected === false;
+      const hapticFailed = typeof livenessResult.hapticMatched === 'number' &&
+        typeof livenessResult.hapticTotal === 'number' &&
+        livenessResult.hapticMatched < livenessResult.hapticTotal;
+      if (audioFailed || hapticFailed) {
+        activateHoneypot(getClientIp(req), 'Liveness check failed', {
+          deviceId: stored.phoneAttestation.deviceId,
+          livenessResult
+        });
+      }
     }
 
     const deviceChallenge = crypto.randomBytes(32).toString('base64');
