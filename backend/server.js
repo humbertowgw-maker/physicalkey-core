@@ -7,7 +7,7 @@ import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import { validatePhoneAttestation } from './auth/phone-auth.js';
 import { validateDeviceSignature, registerDevice } from './auth/device-auth.js';
-import { grantGitAccess, parseBasicAuth, validateGitCredentials } from './git/git-credentials.js';
+import { grantGitAccess, parseBasicAuth, validateGitCredentials, revokeGitAccess } from './git/git-credentials.js';
 import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
 import { getIdentity, resetIdentity } from './auth/identity-admin.js';
 import { logAdminAction, getAdminActionLog } from './audit/log.js';
@@ -510,13 +510,18 @@ app.delete('/admin/identities/:deviceId', requireAdmin, (req, res) => {
   // deliberate re-pair) shouldn't need a second, different admin operation to clear; it's
   // the same "this deviceId starts fresh" action as an identity reset already is.
   const clearedRatchet = clearRatchetState(req.params.deviceId);
+  // And revokes any git credentials already issued for this deviceId — otherwise a stolen
+  // device+phone pair keeps working git access for up to 24h after the identity that
+  // authorized it has been reset, which defeats the point of an incident-response action.
+  const revokedGitAccess = revokeGitAccess(req.params.deviceId);
   console.log(`⚠ Admin reset identity: ${req.params.deviceId} (was kind=${removed.kind}, registered_at=${removed.registered_at})`);
   logAdminAction(req.deviceId, 'identity_reset', req.params.deviceId, {
     kind: removed.kind,
     registeredAt: removed.registered_at,
-    clearedRatchetStatus: clearedRatchet?.status ?? null
+    clearedRatchetStatus: clearedRatchet?.status ?? null,
+    revokedGitAccess
   });
-  res.json({ status: 'reset', deviceId: req.params.deviceId, previousKind: removed.kind, clearedRatchetStatus: clearedRatchet?.status ?? null });
+  res.json({ status: 'reset', deviceId: req.params.deviceId, previousKind: removed.kind, clearedRatchetStatus: clearedRatchet?.status ?? null, revokedGitAccess });
 });
 
 // Durable log of admin actions (currently: identity resets) — who did what, to which

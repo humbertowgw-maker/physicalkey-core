@@ -1,9 +1,16 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'crypto';
 import { startServer, keypair, fullAuth } from './helpers.js';
 
 let server;
 let session;
+const adminKeys = keypair();
+
+async function adminAuth() {
+  const adminSession = await fullAuth(server.baseUrl, `admin-test-phone-${crypto.randomUUID()}`, keypair(), server.adminDeviceId, adminKeys);
+  return adminSession.sessionToken;
+}
 
 before(async () => {
   server = await startServer();
@@ -52,20 +59,36 @@ test('/admin/forensics returns real attacker data (with populated techniques) fo
   await fetch(`${server.baseUrl}/git/auth`); // missing creds
   await fetch(`${server.baseUrl}/api/honeypot/fake-database`);
 
-  const adminSession = await fullAuth(
-    server.baseUrl,
-    'admin-test-phone', keypair(),
-    server.adminDeviceId, keypair()
-  );
+  const adminToken = await adminAuth();
 
   const res = await fetch(`${server.baseUrl}/admin/forensics`, {
-    headers: { Authorization: `Bearer ${adminSession.sessionToken}` }
+    headers: { Authorization: `Bearer ${adminToken}` }
   });
   const body = await res.json();
   assert.equal(res.status, 200);
   assert.ok(Array.isArray(body.attackers) && body.attackers.length > 0, 'expected at least one attacker profile');
   const withTechniques = body.attackers.find((a) => Array.isArray(a.techniques) && a.techniques.length > 0);
   assert.ok(withTechniques, 'attacker techniques must be populated (regression check: a Set that fails to serialize would show up as an empty array here)');
+});
+
+test('a normal successful auth flow is never logged as a honeypot event', async () => {
+  // honeypotLogger is applied only to the three pre-auth endpoints, none of which ever
+  // legitimately carries an Authorization header — logging on "no auth header" as well as
+  // on failure meant every ordinary successful auth attempt got recorded as an "event"
+  // indistinguishable from an attack. A real failure still logs (details.statusCode >= 400,
+  // via this same middleware, independent of any explicit activateHoneypot() call); a
+  // success must not, ever.
+  await fullAuth(server.baseUrl, 'quiet-phone', keypair(), 'quiet-device', keypair());
+
+  const adminToken = await adminAuth();
+  const res = await fetch(`${server.baseUrl}/admin/forensics`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+
+  const successfulEventsLogged = body.events.filter((e) => e.details?.statusCode === 200);
+  assert.equal(successfulEventsLogged.length, 0, 'no honeypot event should ever carry a 200 status code — that middleware only fires on real failures now');
 });
 
 test('honeypot decoy endpoint returns decoy data, not anything real', async () => {

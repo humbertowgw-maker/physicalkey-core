@@ -76,6 +76,26 @@ test('DELETE /admin/identities/:deviceId 404s for an unregistered deviceId', asy
   assert.equal(res.status, 404);
 });
 
+test('resetting a device identity also revokes its git credentials', async () => {
+  const targetDeviceId = 'git-revoke-target';
+  const session = await fullAuth(server.baseUrl, 'git-revoke-phone', keypair(), targetDeviceId, keypair());
+
+  const auth = Buffer.from(`${session.gitCredentials.username}:${session.gitCredentials.password}`).toString('base64');
+  let res = await fetch(`${server.baseUrl}/git/auth`, { headers: { Authorization: `Basic ${auth}` } });
+  assert.equal(res.status, 200, 'git credentials should work before the reset');
+
+  res = await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(body.revokedGitAccess, true, 'the reset response should confirm git access was revoked');
+
+  res = await fetch(`${server.baseUrl}/git/auth`, { headers: { Authorization: `Basic ${auth}` } });
+  assert.notEqual(res.status, 200, 'the same git credentials must stop working immediately after an identity reset — not linger for their remaining 24h');
+});
+
 test('GET /admin/audit-log rejects non-admin requests and records identity resets', async () => {
   let res = await fetch(`${server.baseUrl}/admin/audit-log`);
   assert.equal(res.status, 401);

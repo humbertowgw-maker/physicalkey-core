@@ -50,7 +50,12 @@ export function activateHoneypot(ip, reason, details = {}) {
 export function honeypotLogger(req, res, next) {
   const originalSend = res.send;
   res.send = function(data) {
-    if (res.statusCode >= 400 || !req.get('authorization')) {
+    // Only >= 400 is actually informative here: this middleware is applied exclusively to
+    // the pre-auth endpoints (challenge/verify), which by definition never carry an
+    // Authorization header on a legitimate call — logging on that condition too meant every
+    // normal successful auth attempt was indistinguishable from an attack in
+    // getForensicsReport()'s attacker/suspicion-level aggregation.
+    if (res.statusCode >= 400) {
       insertStmt.run(
         crypto.randomUUID(),
         getClientIp(req),
