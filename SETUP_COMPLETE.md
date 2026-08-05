@@ -1,5 +1,56 @@
 # PhysicalKey Local Backend Setup — Results
 
+## Security audit + fixes: three phases, all shipped (2026-08-05, later the same day)
+
+Same day as the session-ratchet resolution below: ran a full attacker-scenario + code-level
+security audit against the real codebase (backend, firmware, iOS — not assumptions), then
+closed every finding it raised except the two that genuinely need a manufacturing/packaging
+decision rather than code (device provenance, BLE out-of-band pairing — deferred, flagged,
+not silently dropped).
+
+**Phase A — quick wins** (commit `8807b67`): deleted a dead, unused permission-check module
+that trusted a caller-supplied role with zero verification; wired the already-existing but
+never-called `revokeGitAccess()` into the identity-reset escape hatch, so a stolen
+device+phone pair's git access is actually revocable now instead of surviving up to 24h
+past the reset; fixed the honeypot middleware logging every normal successful auth attempt
+as an "event" indistinguishable from a real attack (it was gated on "no Authorization
+header," which is true of every legitimate call to those endpoints by definition — narrowed
+to real failures only).
+
+**Phase B — the Critical finding** (commit `0e953dc`): the session-ratchet's result was a
+bare, unsigned string self-reported by the phone app, with no cryptographic binding to the
+actual BLE exchange — an attacker capable of cloning a device's Ed25519 key could just claim
+`"verified"` without doing any real exchange. Fixed by having the ESP32 sign the ratchet
+output with its existing Ed25519 identity key, bound to the session's challenge nonce; the
+backend now independently verifies that signature and computes the continuity verdict
+itself from its own mirrored HMAC chain, instead of trusting the client. Verified end-to-end
+on the real spare board (`physicalkey-device-680947e00800`) and the Achilles iPhone: first
+session after reflash → `unverifiable` (real prior board state, no backend record yet,
+correctly not a false mismatch), second session → `verified`. A deliberately wrong proof
+was also confirmed caught and honeypotted against the live deploy.
+
+**Phase C — the remaining High-priority items** (commit `b399516`): session/credential
+revocation (a single per-deviceId cutoff timestamp checked against each JWT's own embedded
+`issuedAt` — no blacklist needed — wired into the same identity-reset escape hatch, so one
+admin action now kills identity, ratchet trust, git access, *and* any already-issued session
+all at once); org-scoped audit visibility (org membership/device-access changes are now
+logged, and an org's own owner/admin can see their org's history via
+`GET /orgs/:orgId/audit-log` without needing the single global admin device's credentials).
+
+Full report (8 attack scenarios, code-level analysis, gap analysis, prioritized roadmap) was
+published as an artifact during the session — not saved as a repo file; ask the user if you
+need that level of narrative detail. The summary above plus the code itself should be enough
+for anyone picking this up.
+
+**What's still open, deliberately deferred pending a decision from the user, not a code
+gap:** device provenance (TOFU currently accepts any new deviceId — closing this properly
+needs factory-provisioned certs, or an interim admin allow-list, once there's an actual
+manufacturing process to anchor it to) and BLE first-pairing MITM protection (needs
+out-of-band pairing data, e.g. a per-unit passkey printed on the board/box — a packaging
+decision). Also deferred, lower urgency: backend-compromise blast-radius reduction
+(KMS-backed JWT signing, tamper-evident audit log — real architecture work, reasonable to
+defer until there's a concrete compliance/enterprise reason) and iOS certificate pinning.
+
 ## RESOLVED: Session ratchet — verified end-to-end on real hardware (2026-08-05)
 
 **Update, later the same day:** the blocker below (Achilles iPhone Air stuck at
