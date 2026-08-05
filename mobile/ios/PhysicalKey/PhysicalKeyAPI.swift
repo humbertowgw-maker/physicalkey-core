@@ -201,13 +201,14 @@ struct PhysicalKeyAPI {
         return try await post("/auth/phone/verify", body: body)
     }
 
-    func deviceVerify(deviceChallengeId: String, deviceSignature: String, deviceId: String, publicKeyB64: String?) async throws -> DeviceVerifyResponse {
+    func deviceVerify(deviceChallengeId: String, deviceSignature: String, deviceId: String, publicKeyB64: String?, ratchetStatus: String? = nil) async throws -> DeviceVerifyResponse {
         var body: [String: Any] = [
             "deviceChallengeId": deviceChallengeId,
             "deviceSignature": deviceSignature,
             "deviceId": deviceId
         ]
         if let publicKeyB64 { body["publicKey"] = publicKeyB64 }
+        if let ratchetStatus { body["ratchetStatus"] = ratchetStatus }
         return try await post("/auth/device/verify", body: body)
     }
 

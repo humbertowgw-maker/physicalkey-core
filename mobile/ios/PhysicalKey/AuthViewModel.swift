@@ -97,11 +97,14 @@ final class AuthViewModel: ObservableObject {
                 let signature = try await bluetooth.sign(challenge: deviceChallenge)
                 log("Device signed the challenge")
 
+                let ratchetStatusDebug = await runRatchetCheck(deviceId: identity.deviceId)
+
                 let verified = try await api.deviceVerify(
                     deviceChallengeId: deviceChallengeId,
                     deviceSignature: signature,
                     deviceId: identity.deviceId,
-                    publicKeyB64: identity.publicKeyB64
+                    publicKeyB64: identity.publicKeyB64,
+                    ratchetStatus: ratchetStatusDebug
                 )
                 log("Device verified. Full access granted.")
 
@@ -138,6 +141,25 @@ final class AuthViewModel: ObservableObject {
             result["hapticTotal"] = hapticResult.totalEvents
         }
         return result
+    }
+
+    /// Runs the session-ratchet exchange (see RatchetManager) against the just-connected
+    /// device. Never throws — a board whose firmware doesn't have the ratchet
+    /// characteristics yet (or any other transport hiccup) just means no verdict is
+    /// reported, same "auxiliary signal, never blocks real auth" rule as liveness.
+    private func runRatchetCheck(deviceId: String) async -> String? {
+        do {
+            let verdict = try await RatchetManager.shared.runExchange(deviceId: deviceId, bluetooth: bluetooth)
+            log("Ratchet check: \(verdict.rawValue)")
+            return verdict.rawValue
+        } catch {
+            // TEMPORARY: sending the raw error through as ratchetStatus so it shows up in
+            // the backend's [ratchet-debug] log — the backend rejects it as malformed
+            // (harmless, logged either way) but this sidesteps needing phone-side console
+            // access to see what's actually failing. Revert to returning nil once found.
+            log("Ratchet check unavailable: \(error)")
+            return "debug-error: \(error)"
+        }
     }
 
     private func log(_ message: String) {

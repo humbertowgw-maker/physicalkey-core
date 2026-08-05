@@ -32,6 +32,8 @@ final class DeviceBluetoothManager: NSObject, ObservableObject {
     nonisolated(unsafe) private static let deviceIdCharUUID = CBUUID(string: "b16a3c02-2c1e-4a7a-9b7a-0a1c2d3e4f50")
     nonisolated(unsafe) private static let challengeCharUUID = CBUUID(string: "b16a3c03-2c1e-4a7a-9b7a-0a1c2d3e4f50")
     nonisolated(unsafe) private static let signatureCharUUID = CBUUID(string: "b16a3c04-2c1e-4a7a-9b7a-0a1c2d3e4f50")
+    nonisolated(unsafe) private static let ratchetPubKeyCharUUID = CBUUID(string: "b16a3c05-2c1e-4a7a-9b7a-0a1c2d3e4f50")
+    nonisolated(unsafe) private static let ratchetResponseCharUUID = CBUUID(string: "b16a3c06-2c1e-4a7a-9b7a-0a1c2d3e4f50")
 
     struct DeviceIdentity {
         let deviceId: String
@@ -45,6 +47,8 @@ final class DeviceBluetoothManager: NSObject, ObservableObject {
     private var deviceIdCharacteristic: CBCharacteristic?
     private var challengeCharacteristic: CBCharacteristic?
     private var signatureCharacteristic: CBCharacteristic?
+    private var ratchetPubKeyCharacteristic: CBCharacteristic?
+    private var ratchetResponseCharacteristic: CBCharacteristic?
 
     // CoreBluetooth is delegate-callback based; these bridge that to async/await. Each is
     // consumed exactly once per operation and nilled out immediately to avoid a delegate
@@ -52,6 +56,7 @@ final class DeviceBluetoothManager: NSObject, ObservableObject {
     private var connectContinuation: CheckedContinuation<DeviceIdentity, Error>?
     private var signContinuation: CheckedContinuation<String, Error>?
     private var stateContinuation: CheckedContinuation<Void, Error>?
+    private var ratchetContinuation: CheckedContinuation<Data, Error>?
 
     override init() {
         super.init()
@@ -121,6 +126,26 @@ final class DeviceBluetoothManager: NSObject, ObservableObject {
         }
     }
 
+    /// Writes this session's ephemeral X25519 public key to the device's RatchetPubKey
+    /// characteristic and waits for its notified response on RatchetResponse — same
+    /// write-then-notify shape as `sign(challenge:)`. Returns the raw 113-byte wire payload
+    /// (devicePublicKey(32) || rc(16) || deviceProof(64) || status(1)); see RatchetManager
+    /// for parsing and the actual continuity verdict. Throws (never silently no-ops) if
+    /// this board's firmware doesn't have the ratchet characteristics yet — the caller is
+    /// responsible for treating that as "no ratchet result," same as any other liveness-style
+    /// auxiliary check that must never block real authentication.
+    func runRatchetExchange(phoneEphemeralPublicKey: Data) async throws -> Data {
+        guard let peripheral, let ratchetPubKeyCharacteristic, let ratchetResponseCharacteristic else {
+            throw ConnectionError.notConnected
+        }
+
+        return try await withCheckedThrowingContinuation { continuation in
+            self.ratchetContinuation = continuation
+            peripheral.setNotifyValue(true, for: ratchetResponseCharacteristic)
+            peripheral.writeValue(phoneEphemeralPublicKey, for: ratchetPubKeyCharacteristic, type: .withResponse)
+        }
+    }
+
     func disconnect() {
         if let peripheral {
             centralManager.cancelPeripheralConnection(peripheral)
@@ -130,6 +155,8 @@ final class DeviceBluetoothManager: NSObject, ObservableObject {
         deviceIdCharacteristic = nil
         challengeCharacteristic = nil
         signatureCharacteristic = nil
+        ratchetPubKeyCharacteristic = nil
+        ratchetResponseCharacteristic = nil
     }
 }
 
@@ -190,6 +217,10 @@ extension DeviceBluetoothManager: CBCentralManagerDelegate {
                 signContinuation = nil
                 pending.resume(throwing: error ?? ConnectionError.peripheralDisconnected)
             }
+            if let pending = ratchetContinuation {
+                ratchetContinuation = nil
+                pending.resume(throwing: error ?? ConnectionError.peripheralDisconnected)
+            }
         }
     }
 }
@@ -204,7 +235,10 @@ extension DeviceBluetoothManager: CBPeripheralDelegate {
                 return
             }
             peripheral.discoverCharacteristics(
-                [Self.publicKeyCharUUID, Self.deviceIdCharUUID, Self.challengeCharUUID, Self.signatureCharUUID],
+                [
+                    Self.publicKeyCharUUID, Self.deviceIdCharUUID, Self.challengeCharUUID, Self.signatureCharUUID,
+                    Self.ratchetPubKeyCharUUID, Self.ratchetResponseCharUUID
+                ],
                 for: service
             )
         }
@@ -225,6 +259,12 @@ extension DeviceBluetoothManager: CBPeripheralDelegate {
                 case Self.deviceIdCharUUID: deviceIdCharacteristic = characteristic
                 case Self.challengeCharUUID: challengeCharacteristic = characteristic
                 case Self.signatureCharUUID: signatureCharacteristic = characteristic
+                // Optional: a board whose firmware predates the session-ratchet feature
+                // simply won't expose these, and that must not break ordinary auth —
+                // runRatchetExchange throws .notConnected in that case, and callers treat
+                // a ratchet failure the same as any other missing auxiliary signal.
+                case Self.ratchetPubKeyCharUUID: ratchetPubKeyCharacteristic = characteristic
+                case Self.ratchetResponseCharUUID: ratchetResponseCharacteristic = characteristic
                 default: break
                 }
             }
@@ -248,6 +288,10 @@ extension DeviceBluetoothManager: CBPeripheralDelegate {
                     let pending = signContinuation
                     signContinuation = nil
                     pending?.resume(throwing: error)
+                } else if characteristic.uuid == Self.ratchetResponseCharUUID {
+                    let pending = ratchetContinuation
+                    ratchetContinuation = nil
+                    pending?.resume(throwing: error)
                 } else {
                     let pending = connectContinuation
                     connectContinuation = nil
@@ -265,6 +309,10 @@ extension DeviceBluetoothManager: CBPeripheralDelegate {
                 let pending = signContinuation
                 signContinuation = nil
                 pending?.resume(returning: data.base64EncodedString())
+            case Self.ratchetResponseCharUUID:
+                let pending = ratchetContinuation
+                ratchetContinuation = nil
+                pending?.resume(returning: data)
             default:
                 break
             }
@@ -272,12 +320,17 @@ extension DeviceBluetoothManager: CBPeripheralDelegate {
     }
 
     nonisolated func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-        // The actual signature arrives via didUpdateValueFor's notify, once the firmware
-        // finishes signing — this write acknowledgment on its own doesn't resolve anything.
+        // The actual signature/ratchet response arrives via didUpdateValueFor's notify, once
+        // the firmware finishes computing it — this write acknowledgment on its own doesn't
+        // resolve anything unless the write itself failed.
         MainActor.assumeIsolated {
             if let error, characteristic.uuid == Self.challengeCharUUID {
                 let pending = signContinuation
                 signContinuation = nil
+                pending?.resume(throwing: error)
+            } else if let error, characteristic.uuid == Self.ratchetPubKeyCharUUID {
+                let pending = ratchetContinuation
+                ratchetContinuation = nil
                 pending?.resume(throwing: error)
             }
         }

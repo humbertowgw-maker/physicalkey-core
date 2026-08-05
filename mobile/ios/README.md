@@ -71,6 +71,24 @@ xcrun devicectl device install app --device <device-identifier> "$APP_PATH"
 xcrun devicectl device process launch --device <device-identifier> com.physicalkey.app
 ```
 
+**Symptom that cost real time to diagnose (2026-08-04): a rebuild can silently re-trigger
+the "trust" requirement on an already-trusted phone.** After a full `rm -rf DerivedData` +
+clean build, `xcodebuild`'s automatic signing resolution picked a *different* Apple ID
+(`achilleszepeda@icloud.com`) than whatever had been in use before on that exact phone —
+even though the phone had been running earlier builds of this same app all session with no
+issue. The failure mode is confusing because it doesn't look like a signing problem at
+first: `devicectl device install app` reports success and `device info apps` lists the app
+as installed, but the app doesn't actually appear on the home screen or in Spotlight, and
+`devicectl device process launch` fails with "invalid code signature, inadequate
+entitlements or its profile has not been explicitly trusted by the user." Uninstalling,
+reinstalling, and even a full phone restart do **not** fix this — the actual fix is tapping
+the app's icon (or attempting to launch it) once to surface iOS's own "Untrusted
+Developer" alert, then Settings → General → VPN & Device Management → tap the named
+developer profile → Trust. One-time per (phone, certificate) pair; after that, reinstalls
+work normally again. Worth checking this *first* if a build that was working suddenly
+seems to not exist on a device that hasn't had this exact certificate trusted since the
+last clean rebuild.
+
 Two things worth knowing about the currently-signed-in Xcode account on this Mac,
 counterintuitive but confirmed by testing: `DEVELOPMENT_TEAM: 9RYL8ZRC3U` in
 `project.yml` is what actually works, even though the resulting build ends up signed

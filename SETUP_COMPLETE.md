@@ -1,5 +1,212 @@
 # PhysicalKey Local Backend Setup — Results
 
+## HANDOFF: Session ratchet — code complete, real-device verification still needed (2026-08-05)
+
+**Read this whole section before doing anything else.** This is a mid-feature handoff — the
+code exists and compiles/deploys, but the one thing that hasn't been confirmed is whether
+it actually works end-to-end on a real phone + real board. A long previous session burned
+significant time on device/tooling confusion (documented below) without resolving that
+confirmation, not because of a known code bug.
+
+### What this feature is
+
+A session-ratchet continuity layer, on top of the existing Ed25519 phone/device auth: an
+ephemeral X25519 key exchange happens over BLE on every connection, chained forward via
+HMAC-SHA512, so a *cloned* device identity (someone who somehow got the real ESP32's
+private key) goes stale the moment the real phone+board pair completes one more real
+session. Full design rationale, threat model, and protocol spec were written up as a plan
+artifact earlier in the parent conversation — not saved as a repo file, so if you need that
+level of detail and don't have it, ask the user; otherwise the summary below plus reading
+the code directly should be enough.
+
+Reported to the backend as `ratchetStatus`, one of:
+- `bootstrap` — no prior state on one or both sides (first pairing, or a re-flash/reinstall
+  wiped state). **Never treated as suspicious** — this is the single most important design
+  rule, see "Recovery path" below.
+- `verified` — both sides have prior state and it matches. Real continuity confirmed.
+- `mismatch` — both sides have prior state and it *disagrees*. The actual signal worth
+  logging (not blocking — see below).
+
+**Warn-not-block by design, same as the earlier liveness-check layer**: a `mismatch` is
+logged to the existing honeypot/forensics system but never rejects authentication. This was
+a deliberate choice given this exact session already caused two costly false-lockout bugs
+earlier from state going out of sync (a TOFU identity lockout, and a BLE-bond lockout after
+a board erase) — treating absence-of-state as suspicious would recreate that class of bug.
+
+### What's actually done and verified (not just written)
+
+1. **Firmware** — `hardware/firmware-idf/PhysicalKeyDevice/main/ratchet.{h,cpp}`, plus 2 new
+   GATT characteristics added to `gatt_svr.cpp` (`RatchetPubKey` write, `RatchetResponse`
+   read+notify) and `CMakeLists.txt` updated to build the new source file. **Builds clean**
+   via `idf.py build`. **Flashed to a spare ESP32 board** (deviceId
+   `physicalkey-device-680947e00800`, connects via USB-serial, port name varies —
+   was `/dev/cu.usbserial-0001` in the prior session but check `ls /dev/cu.*` fresh, it can
+   renumber). **Boots clean, BLE advertises correctly** — confirmed via direct serial
+   monitoring (see "Tooling notes" for how, since `idf.py monitor` needs a real TTY and
+   won't work when driven non-interactively).
+   - Uses the vendored crypto library's `Curve25519::dh1/dh2` (X25519 DH) and
+     `SHA512::resetHMAC/finalizeHMAC` / the `hmac<SHA512>(...)` template helper — both
+     confirmed present in `components/ed25519/include/` before use, nothing new vendored.
+   - **This spare board's flash is encrypted** (Development Mode flash encryption + NVS
+     encryption, from earlier work this session). Re-flashing it requires
+     `idf.py -p <port> encrypted-flash`, **not** plain `idf.py flash` — using the plain
+     command writes an unencrypted image to a chip that expects encrypted flash and bricks
+     it into a boot loop (`invalid header: 0x4a7c...`, repeated `RTCWDT_RTC_RESET`). This
+     happened once already and was recovered via `encrypted-flash`; don't repeat the
+     mistake.
+
+2. **Backend** — `backend/auth/ratchet.js` (new), changes in `backend/server.js`'s
+   `/auth/device/verify` handler, new `ratchet_state` SQLite table in `backend/lib/db.js`.
+   **40+ tests pass** (`npm test`), **deployed to Railway and verified live** — confirmed
+   via direct `railway ssh` SQLite query that the table exists and via test coverage that
+   backward-compatibility (no `ratchetStatus` field), warn-not-block, forensics logging,
+   and the admin-reset escape hatch (`DELETE /admin/identities/:deviceId` now also clears
+   ratchet state) all work correctly.
+   - **Currently has a temporary debug line** — see "Temporary debug code" below.
+
+3. **iOS** — `mobile/ios/PhysicalKey/RatchetManager.swift` (new), changes in
+   `DeviceBluetoothManager.swift` (2 new characteristics, `runRatchetExchange` method) and
+   `AuthViewModel.swift` (wired into `connectAndAuthenticateDevice`, runs right after the
+   existing device-signature step). **Compiles clean.** **NOT YET CONFIRMED RUNNING on a
+   real phone** — every attempt to verify this got blocked by device/tooling issues (next
+   section), not a known Swift bug. Don't assume it's broken; don't assume it works either
+   — find out first.
+
+### The actual blocker: device/tooling confusion, not (necessarily) a code bug
+
+**Two physically different phones got confused with each other, repeatedly, across a very
+long troubleshooting session.** Independently verified via `xcrun devicectl device info
+details --device <id> | grep -i "udid\|marketingName"`:
+
+| Xcode/devicectl name | devicectl CoreDevice ID | Classic UDID | Model | Role |
+|---|---|---|---|---|
+| `iPhone` | `1FBAA9F4-0F90-50E4-9894-8D37F380D4FA` | `00008140-0002259E1EE1401C` | iPhone 16 Pro Max | **Humberto's existing, already-hardened prototype phone.** Used all session for the Phase 0 (liveness spike) and Phase 2 (liveness integration) work, which is legitimately part of hardening *this* phone/board pairing. |
+| `Achilles iphone` | `AC6C3C43-1F60-5FB8-A8AE-9F9005326F58` | `00008150-001444890E92401C` | iPhone Air | **A second phone belonging to "Achilles."** This is the one that should be used to test the ratchet feature against the *spare* board, so the existing hardened prototype's phone+board pairing is never put at risk of being disrupted mid-test. |
+
+**Every ratchet test this session actually ran against the iPhone 16 Pro Max** (the "don't
+touch" one), connected to the *spare* board (not the hardened prototype's board, so no
+actual harm was done to the working prototype's pairing — but it wasn't the intended test
+device either). Every attempt showed `ratchetStatus=undefined` in the backend's debug log,
+meaning **the ratchet exchange never actually executed on the phone, across every single
+attempt** — not one single successful or even failed-with-a-real-error execution was ever
+observed. Given how many *different* root causes were found and fixed along the way (see
+below), each of which could plausibly have been *the* blocker, the honest state is: it's
+unknown whether the Swift code itself works, because a clean, uninterrupted run was never
+achieved.
+
+**Real, confirmed issues found and fixed along the way** (in case any recur):
+- An untrusted developer certificate. A full `rm -rf DerivedData` + clean rebuild caused
+  Xcode's automatic signing resolution to switch to a *different* Apple ID
+  (`achilleszepeda@icloud.com`) than whatever the phone had already trusted, and the
+  failure mode is deeply misleading: `devicectl device install app` reports success, `device
+  info apps` lists the app as installed, but it doesn't appear on the home screen or in
+  Spotlight, and `devicectl device process launch` fails with "invalid code signature...
+  profile has not been explicitly trusted." Fix: tap the app (triggers iOS's own
+  "Untrusted Developer" alert) or go to Settings → General → VPN & Device Management →
+  trust the named developer profile. One-time per (phone, certificate) pair. This is now
+  documented in `mobile/ios/README.md`.
+- `xcrun devicectl`'s `process launch` command proved unreliable for this specific phone
+  all session — reported false "Locked" errors when the phone was confirmed unlocked (via
+  the user directly looking at the home screen), and its `device info apps`/install
+  success reporting did not reliably reflect actual on-device reality. **Recommendation:
+  prefer Xcode's own GUI (Product → Destination → pick the explicit device, then Run) over
+  `devicectl` CLI commands for this project going forward**, or at minimum treat
+  `devicectl`'s success/failure reporting with real skepticism and cross-check against
+  independent evidence (Railway logs, serial monitor) rather than trusting it at face
+  value.
+- Xcode's GUI destination picker silently defaulted to the **iOS Simulator** ("iPhone 17
+  Pro") at one point instead of a real device — the simulator obviously has no real
+  Bluetooth and can never reach a physical board. Always explicitly verify the destination
+  says a real device name before hitting Run, not a simulator.
+- A board flash-encryption bricking incident (see firmware section above) — recovered, but
+  don't repeat with `idf.py flash` instead of `idf.py -p <port> encrypted-flash` on an
+  already-encrypted board.
+
+### Temporary debug code — still in place, uncommitted-turned-committed for safety
+
+To make this handoff safe (nothing at risk of being lost), these were **committed as-is**
+rather than left uncommitted — they are debugging aids, not shipped behavior, and should be
+reverted once a real device-verification run actually succeeds or fails with a genuine
+error:
+
+- `mobile/ios/PhysicalKey/ContentView.swift`: the "Connect to Key Device" button's label
+  was changed to `"RATCHET-BUILD-CHECK-9F2 · Connect to Key Device"` — a build-freshness
+  sanity check (seeing this exact string on-screen proves the currently-installed build is
+  the one with the ratchet code, given how many stale-build red herrings came up). Revert
+  to `"Connect to Key Device"` once done.
+- `mobile/ios/PhysicalKey/AuthViewModel.swift`'s `runRatchetCheck` currently returns
+  `String?` instead of `RatchetVerdict?`, and on failure returns `"debug-error:
+  <description>"` instead of `nil` — this makes any Swift-side error visible in the
+  backend's log (see next line) without needing reliable phone console access, which this
+  session never achieved. To revert: change the return type back to `RatchetVerdict?`,
+  return `nil` on catch, and update the call site in `connectAndAuthenticateDevice` to use
+  `ratchetVerdict?.rawValue` when calling `api.deviceVerify`.
+- `backend/server.js`'s `/auth/device/verify` handler has a temporary line:
+  `console.log(\`[ratchet-debug] deviceId=${deviceId}
+  ratchetStatus=${JSON.stringify(ratchetStatus)}
+  bodyKeys=${Object.keys(req.body).join(',')}\`);` right after destructuring the request
+  body. Remove once done, then `railway up --detach` to redeploy without it.
+
+### Recommended next steps, in order
+
+1. **Get the Achilles iPhone Air (`00008150-001444890E92401C`) reliably connected first**,
+   before touching any code. It showed `ddiServicesAvailable: false` and "unavailable" all
+   session despite unlock + "Trust This Computer" + cable swap — this was never actually
+   resolved. Try: a full restart of both the Mac and the phone, a different USB-C
+   cable/port, opening Xcode's Window → Devices and Simulators and waiting for developer
+   disk image preparation to finish before doing anything else, and removing/re-adding any
+   stale Xcode device pairing for just this phone. Confirm success via
+   `xcrun devicectl device info details --device AC6C3C43-1F60-5FB8-A8AE-9F9005326F58 | grep -i "developerModeStatus\|ddiServicesAvailable"`
+   showing `ddiServicesAvailable: true` before attempting an install.
+2. **Build and install explicitly to that device's identifier**, not by name (names can
+   become ambiguous) — `xcodebuild ... -destination 'id=00008150-001444890E92401C'` (or the
+   devicectl CoreDevice ID form, `id=AC6C3C43-1F60-5FB8-A8AE-9F9005326F58`, for
+   devicectl-based commands specifically — the two ID namespaces aren't interchangeable
+   across tools, xcodebuild wants the classic UDID, devicectl wants its own CoreDevice ID).
+3. **Confirm the `RATCHET-BUILD-CHECK-9F2` button label is visible on-screen** before doing
+   anything else — this is the cheapest possible confirmation that a stale build isn't the
+   problem again.
+4. Go through the real auth flow on the Achilles phone, connect to the spare board
+   (`physicalkey-device-680947e00800`), and check
+   `cd ~/physicalkey-core/backend && railway logs` for a
+   `[ratchet-debug] deviceId=physicalkey-device-680947e00800 ratchetStatus=...` line.
+   `bootstrap` on the first-ever run against this phone+board pair is the expected,
+   correct result (no prior state yet) — run it a **second** time and confirm `verified`
+   this time, which is the real proof the ratchet is chaining correctly session-to-session.
+5. If a genuine Swift-side error shows up (via the `debug-error:` string), fix it — likely
+   candidates worth checking first, based on re-reading the code fresh: whether
+   `DeviceBluetoothManager.runRatchetExchange` needs to wait for
+   `didUpdateNotificationStateFor` to actually confirm the notify-subscription completed
+   before writing the ephemeral public key (a possible race — the code currently fires the
+   write immediately after calling `setNotifyValue`, without confirming the subscription
+   landed first).
+6. Once a real `verified` result is confirmed, revert the three temporary debug changes
+   above, run `npm test` in `backend/`, redeploy (`railway up --detach`), and commit.
+
+### Tooling notes for whoever picks this up
+
+- `idf.py monitor` requires a real interactive TTY and will fail non-interactively
+  ("Monitor requires standard input to be attached to TTY"). To read ESP32 serial output
+  from a script/agent instead: reset the board via
+  `python -m esptool --chip esp32 -p <port> --after hard_reset read_mac` (uses esptool's
+  own tested reset logic — don't hand-roll DTR/RTS toggling, this board's wiring doesn't
+  match the naive assumption and will land it in bootloader/download mode instead of
+  normal boot), then read raw serial with a small pyserial script that does **not** touch
+  `.dtr`/`.rts` itself.
+- To pull a real crash log from a connected device instead of guessing at a crash cause:
+  `xcrun devicectl device info files --device <id> --domain-type systemCrashLogs` lists
+  them, `xcrun devicectl device copy from --device <id> --domain-type systemCrashLogs
+  --source "<filename>.ips" --destination <local path>` retrieves one. It's a JSON-lines
+  file (`json.loads(text.split('\n', 1)[1])`) — the crashed thread's frames are the fastest
+  way to a real root cause, much faster than guessing.
+- Swift 6 strict concurrency caused two real, subtle crashes this session unrelated to
+  ratchet logic itself (in the liveness-check audio code) — both were closures that Swift
+  inferred as `@MainActor`-isolated just from being written inside an `@MainActor` class,
+  which crashed when a system framework (AVAudioEngine) called them from a different
+  thread. If a similarly weird crash/hang shows up in new code, check for this pattern
+  first (explicit `@Sendable` typing on the closure, defined as a free function rather than
+  inline, is the fix) before assuming it's a logic bug.
+
 ## Session lifetime, admin audit log, and a Dockerfile outage (2026-08-04)
 
 Closed out the last two items from the hardening pass above:

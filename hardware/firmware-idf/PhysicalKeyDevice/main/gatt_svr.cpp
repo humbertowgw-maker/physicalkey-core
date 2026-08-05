@@ -15,6 +15,7 @@
 
 #include "Ed25519.h"
 #include "identity.h"
+#include "ratchet.h"
 
 static const char *TAG = "gatt_svr";
 
@@ -34,9 +35,19 @@ static const ble_uuid128_t chr_challenge_uuid =
     BLE_UUID128_INIT(PK_UUID128(0x03));
 static const ble_uuid128_t chr_signature_uuid =
     BLE_UUID128_INIT(PK_UUID128(0x04));
+static const ble_uuid128_t chr_ratchet_pubkey_uuid =
+    BLE_UUID128_INIT(PK_UUID128(0x05));
+static const ble_uuid128_t chr_ratchet_response_uuid =
+    BLE_UUID128_INIT(PK_UUID128(0x06));
 
 static uint16_t signature_val_handle;
 static uint8_t signature[64];
+
+static uint16_t ratchet_response_val_handle;
+// Wire layout: devicePublicKey(32) || rc(16) || deviceProof(64) || status(1) = 113 bytes.
+// Larger than the default 23-byte ATT MTU, same as it already is for other reads here —
+// NimBLE handles the multi-part ATT Read Blob transparently, nothing extra needed.
+static uint8_t ratchet_response_wire[32 + 16 + 64 + 1];
 
 static int access_public_key(uint16_t conn_handle, uint16_t attr_handle,
                               struct ble_gatt_access_ctxt *ctxt, void *arg) {
@@ -86,6 +97,50 @@ static int access_signature(uint16_t conn_handle, uint16_t attr_handle,
     return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
 }
 
+// Phone writes its fresh 32-byte X25519 ephemeral public key here; the device runs its
+// half of the exchange synchronously (same write-triggers-computation pattern as
+// access_challenge above) and makes the result available via RatchetResponse's notify,
+// same as Challenge -> Signature.
+static int access_ratchet_pubkey(uint16_t conn_handle, uint16_t attr_handle,
+                                  struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    if (OS_MBUF_PKTLEN(ctxt->om) != 32) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+
+    uint8_t phonePublicKey[32];
+    uint16_t copied = 0;
+    if (ble_hs_mbuf_to_flat(ctxt->om, phonePublicKey, sizeof(phonePublicKey), &copied) != 0 || copied != 32) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    RatchetExchangeResult result;
+    if (!ratchet_run_exchange(phonePublicKey, &result)) {
+        // X25519 failure (weak point) — extremely unlikely with a random ephemeral key,
+        // but fail closed: don't publish a response for this attempt. The phone will see
+        // a stale/zeroed characteristic and can retry the whole connection.
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    uint8_t *w = ratchet_response_wire;
+    memcpy(w, result.devicePublicKey, 32); w += 32;
+    memcpy(w, result.rc, 16); w += 16;
+    memcpy(w, result.deviceProof, 64); w += 64;
+    *w = result.status;
+
+    ble_gatts_chr_updated(ratchet_response_val_handle);
+    ESP_LOGI(TAG, "Ratchet exchange complete and notified.");
+    return 0;
+}
+
+static int access_ratchet_response(uint16_t conn_handle, uint16_t attr_handle,
+                                    struct ble_gatt_access_ctxt *ctxt, void *arg) {
+    int rc = os_mbuf_append(ctxt->om, ratchet_response_wire, sizeof(ratchet_response_wire));
+    return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
 static const struct ble_gatt_svc_def gatt_svcs[] = {
     {
         .type = BLE_GATT_SVC_TYPE_PRIMARY,
@@ -117,6 +172,17 @@ static const struct ble_gatt_svc_def gatt_svcs[] = {
                 .access_cb = access_signature,
                 .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_NOTIFY,
                 .val_handle = &signature_val_handle,
+            },
+            {
+                .uuid = &chr_ratchet_pubkey_uuid.u,
+                .access_cb = access_ratchet_pubkey,
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_ENC,
+            },
+            {
+                .uuid = &chr_ratchet_response_uuid.u,
+                .access_cb = access_ratchet_response,
+                .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_NOTIFY,
+                .val_handle = &ratchet_response_val_handle,
             },
             {
                 0, // No more characteristics in this service.
