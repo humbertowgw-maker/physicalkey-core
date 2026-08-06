@@ -1,5 +1,49 @@
 # PhysicalKey Local Backend Setup — Results
 
+## RESOLVED: Anti-Clone plan Phase 4 — ratchet confirmed on the hardened prototype board (2026-08-06)
+
+The gap flagged earlier today (every real ratchet verification on record only ever ran
+against the spare board, never the hardened prototype board specifically, per the
+Anti-Clone Security Layers plan's Phase 4) is closed.
+
+**Root cause, confirmed, not assumed:** the hardened board (`physicalkey-device-680947e03c9c`)
+was still running **pre-ratchet firmware** — verified by checking `ratchet: null` on its
+identity record after real, successful device-auth connections (device signature verified,
+git credentials granted), which only makes sense if the ratchet GATT exchange never ran at
+all. Also found and fixed along the way: this same board had been claimed by a real org
+("Whitegwireless", from earlier Team-feature testing on 2026-08-04) that only the other
+phone had access to — released via the new `DELETE /admin/device-org/:deviceId` admin
+endpoint before any of this could even be attempted on the intended phone.
+
+**Fix:** rebuilt and reflashed current `main` (`idf.py -p <port> encrypted-flash` — this
+board has NVS+flash encryption enabled, plain `flash` would have bricked it). Migration
+tested first against a hand-built pre-existing-schema database, not just a fresh one.
+The board's Ed25519 identity survived the reflash unchanged (its registered public key is
+identical before/after) — the `encrypted-flash` operation didn't touch the NVS partition,
+so no admin identity reset was needed.
+
+**Verified live, from production, not inferred:** `GET /admin/identities/physicalkey-device-680947e03c9c`
+now returns:
+```json
+"ratchet": { "status": "verified", "verified_by": "server", "next_proof": "...", "updated_at": ... }
+```
+`verified_by: "server"` confirms this is the backend independently computing the verdict
+from its own mirrored HMAC chain (the Phase B security-audit fix), not a client-reported
+claim. `access_count` moved from 19 to 22 across the real connections that produced this —
+the 16 Pro Max, paired with the actual hardened board, running current firmware, for the
+first time. One log-tailing artifact along the way: `railway logs`'s live-follow mode
+missed the window entirely (empty output) even though the connection had already
+succeeded — the database state, not the log stream, is what actually confirmed this;
+worth remembering for next time before assuming a quiet log tail means nothing happened.
+
+Not separately re-verified tonight: the ratchet's mismatch/recovery-path handling
+specifically on this board (deliberately desyncing it and confirming the escape hatch) —
+but that logic is identical, board-independent code already covered by 6 dedicated,
+passing backend tests (bootstrap, verified, mismatch, wrong-key-rejected, unverifiable,
+legacy-unsigned-backward-compat). What specifically needed this board's real hardware —
+whether the ratchet firmware was even present and could reach a genuine server-verified
+`verified` state — is now confirmed, not assumed.
+
 ## Audit follow-up: cleanup, allow-list populated (not yet enforced), BLE OOB deferred (2026-08-06)
 
 Closed out the loose ends from re-verifying the whole project against the three-phase audit
