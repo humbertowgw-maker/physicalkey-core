@@ -11,6 +11,15 @@ import Foundation
 struct PhysicalKeyAPI {
     let baseURL: URL
 
+    // Pinned to the backend's CA root — see CertificatePinning.swift for why root-level,
+    // not leaf. One session per PhysicalKeyAPI instance (there's exactly one, held by
+    // AuthViewModel/OrganizationViewModel for their lifetime), not a new one per request.
+    private let session = URLSession(
+        configuration: .default,
+        delegate: PinnedURLSessionDelegate(),
+        delegateQueue: nil
+    )
+
     struct PhoneChallengeResponse: Decodable {
         let challengeId: String
         let challenge: String
@@ -235,7 +244,7 @@ struct PhysicalKeyAPI {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         return try decode(data: data, response: response)
     }
 
@@ -243,7 +252,7 @@ struct PhysicalKeyAPI {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         return try decode(data: data, response: response)
     }
 
@@ -252,7 +261,7 @@ struct PhysicalKeyAPI {
         request.httpMethod = "DELETE"
         request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
         return try decode(data: data, response: response)
     }
 

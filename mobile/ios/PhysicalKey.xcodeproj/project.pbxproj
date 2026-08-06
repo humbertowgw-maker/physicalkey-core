@@ -18,6 +18,7 @@
 		B859B48C3D90551FDC516EAA /* KeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1673C4E131A63D20EDCAF518 /* KeyManager.swift */; };
 		B8E69D7D0C99CF19095CDD79 /* RatchetManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 002B228ABF6D3E5F984C17C1 /* RatchetManager.swift */; };
 		BBA845A301D98FED0EA6045A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F037FF1DDD1650B16ECCDA9 /* ContentView.swift */; };
+		BCD884386943011B2DE92AC3 /* CertificatePinning.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77B909CFD14176167912310 /* CertificatePinning.swift */; };
 		F96DEBAD1DA7BEF058F9232F /* AuthViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CA6D4F45E2E62C3E0B324FF /* AuthViewModel.swift */; };
 /* End PBXBuildFile section */
 
@@ -32,6 +33,7 @@
 		705211E5DD3DDF3AA02D6B5A /* LivenessSpikeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivenessSpikeView.swift; sourceTree = "<group>"; };
 		98109053DDB9665234E0B9E5 /* PhysicalKey.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PhysicalKey.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BC605602BE0E09BB723907B6 /* PhysicalKeyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicalKeyApp.swift; sourceTree = "<group>"; };
+		E77B909CFD14176167912310 /* CertificatePinning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CertificatePinning.swift; sourceTree = "<group>"; };
 		EF408DC49EBE7DE23CF1AE54 /* OrganizationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizationViewModel.swift; sourceTree = "<group>"; };
 		EF5627678CED88CF9F8885E3 /* LivenessSpike.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivenessSpike.swift; sourceTree = "<group>"; };
 		F44218E4C282A21C70E6BBFD /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -51,6 +53,7 @@
 			children = (
 				F44218E4C282A21C70E6BBFD /* Assets.xcassets */,
 				0CA6D4F45E2E62C3E0B324FF /* AuthViewModel.swift */,
+				E77B909CFD14176167912310 /* CertificatePinning.swift */,
 				4F037FF1DDD1650B16ECCDA9 /* ContentView.swift */,
 				248EABAD6771BF9B4147E09A /* DeviceBluetoothManager.swift */,
 				1673C4E131A63D20EDCAF518 /* KeyManager.swift */,
@@ -145,6 +148,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F96DEBAD1DA7BEF058F9232F /* AuthViewModel.swift in Sources */,
+				BCD884386943011B2DE92AC3 /* CertificatePinning.swift in Sources */,
 				BBA845A301D98FED0EA6045A /* ContentView.swift in Sources */,
 				0CC9DC77EACC56346C884647 /* DeviceBluetoothManager.swift in Sources */,
 				B859B48C3D90551FDC516EAA /* KeyManager.swift in Sources */,
