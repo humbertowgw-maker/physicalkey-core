@@ -1,5 +1,60 @@
 # PhysicalKey Local Backend Setup — Results
 
+## Audit follow-up: cleanup, allow-list populated (not yet enforced), BLE OOB deferred (2026-08-06)
+
+Closed out the loose ends from re-verifying the whole project against the three-phase audit
+below. Commit `5cff987`.
+
+- **Fixed a stale doc comment**: `PhysicalKeyAPI.swift` said "pinned to the backend's CA
+  root"; the real implementation (`CertificatePinning.swift`) pins to the issuing
+  intermediate, deliberately not the root. Comment now matches the code.
+- **Deleted `~/physicalkey-ios` and `~/physicalkey-app`** — untracked (no git), fossilized
+  TestFlight-attempt scaffolding from 2026-08-03, missing every file added to the real app
+  since (`AuthViewModel`, `CertificatePinning`, `RatchetManager`, etc.). The still-useful
+  TestFlight submission process (App Store Connect setup, archive/export/upload commands)
+  was salvaged into `mobile/ios/TESTFLIGHT.md` before deleting.
+- **Added `GET /admin/identities`** — previously the only way to inspect a registration was
+  a single-deviceId lookup, with no way to audit the full set without already knowing every
+  deviceId to ask about. Used it live against production to enumerate every registered
+  identity and confirm which two are real hardware vs. this week's test/smoke-script noise:
+  `physicalkey-device-680947e03c9c` (the hardened prototype board, `access_count: 16`) and
+  `physicalkey-device-680947e00800` (the spare board, `access_count: 13`). 74/74 tests pass.
+- **Device allow-list: populated, deliberately NOT yet enforced.** Both real board IDs above
+  are on the allow-list (`POST /admin/device-allowlist`, confirmed via `GET
+  /admin/device-allowlist`). `ENFORCE_DEVICE_ALLOWLIST` is still unset on Railway — left off
+  on purpose so the user can turn it on himself when ready to actually test the enforcement
+  behavior, not because anything is blocking it. **A third ESP32 board exists but is
+  unflashed and unpaired** — confirmed directly with the user. This doesn't matter today
+  (an unregistered board can't be affected by the allow-list either way), but it WILL matter
+  the moment it's flashed and paired: with enforcement on, that board's very first
+  connection attempt will be rejected unless its deviceId is added to the allow-list
+  *first*. To find its deviceId before pairing: read it off the serial monitor at boot
+  (`physicalkey-device-<12 hex chars from esp_efuse_mac_get_default>`, see
+  `hardware/firmware-idf/PhysicalKeyDevice/main/identity.cpp`), or — with enforcement
+  temporarily off — just pair it once and re-run `GET /admin/identities` to see what
+  deviceId it registered as. **When enforcement does get turned on**: `railway variables
+  --set "ENFORCE_DEVICE_ALLOWLIST=true"` from `backend/`, then `railway up --detach -y`
+  and confirm via `railway status` that the deploy actually settles (not just `Online`
+  mid-build — see the troubleshooting note below on why that's not sufficient).
+- **BLE first-pairing MITM protection: confirmed still open, deliberately staying deferred.**
+  Read directly from `hardware/firmware-idf/PhysicalKeyDevice/main/main.cpp:234-238`:
+  `sm_io_cap = BLE_SM_IO_CAP_NO_IO`, `sm_mitm = 0`, `sm_sc = 1` — LE Secure Connections
+  pairing (not the badly-broken Legacy pairing), but Just Works, so an active attacker
+  physically present at the exact moment of a board's first-ever pairing could still insert
+  themselves. Fixing this for real needs a per-unit out-of-band passkey (printed on the
+  board/box) — a packaging decision the user hasn't made yet, same as the original audit
+  scoped it. Explicitly decided to leave this alone rather than make an interim change:
+  turning on `sm_mitm` would force every already-bonded board to re-pair from scratch,
+  risking the exact class of lockout/mixup bug this project has already been hit by twice
+  (the TOFU identity lockout, the BLE-bond lockout after a board erase). Protecting the
+  pairings that already work took priority over closing this gap partially and riskily.
+- **Still pending, deliberately**: production `SECRET_KEY` was accidentally printed into an
+  assistant session while checking Railway's variables (a redaction regex didn't match
+  Railway CLI's actual table formatting). The user asked to hold off rotating it until an
+  ideal moment — not immediately, to avoid invalidating live session tokens mid-test — but
+  it should still happen before too long. Rotate via a fresh `crypto.randomBytes(48)`, set
+  on Railway, redeploy, then do one live auth check to confirm health post-rotation.
+
 ## Security audit + fixes: three phases, all shipped (2026-08-05, later the same day)
 
 Same day as the session-ratchet resolution below: ran a full attacker-scenario + code-level
