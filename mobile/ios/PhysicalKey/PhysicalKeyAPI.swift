@@ -11,9 +11,10 @@ import Foundation
 struct PhysicalKeyAPI {
     let baseURL: URL
 
-    // Pinned to the backend's CA root — see CertificatePinning.swift for why root-level,
-    // not leaf. One session per PhysicalKeyAPI instance (there's exactly one, held by
-    // AuthViewModel/OrganizationViewModel for their lifetime), not a new one per request.
+    // Pinned to the backend's issuing intermediate cert — see CertificatePinning.swift for
+    // why intermediate-level, not leaf or root. One session per PhysicalKeyAPI instance
+    // (there's exactly one, held by AuthViewModel/OrganizationViewModel for their lifetime),
+    // not a new one per request.
     private let session = URLSession(
         configuration: .default,
         delegate: PinnedURLSessionDelegate(),

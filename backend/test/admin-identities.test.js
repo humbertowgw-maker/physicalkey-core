@@ -20,6 +20,29 @@ test('GET/DELETE /admin/identities reject requests with no admin token', async (
   assert.equal(res.status, 401);
 });
 
+test('GET /admin/identities lists every registered identity, without exposing public keys', async () => {
+  const deviceId = 'list-target-device';
+  await fullAuth(server.baseUrl, 'list-target-phone', keypair(), deviceId, keypair());
+
+  const unauth = await fetch(`${server.baseUrl}/admin/identities`);
+  assert.equal(unauth.status, 401);
+
+  const res = await fetch(`${server.baseUrl}/admin/identities`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray(body.identities));
+
+  const phoneEntry = body.identities.find(i => i.device_id === 'list-target-phone');
+  const deviceEntry = body.identities.find(i => i.device_id === deviceId);
+  assert.ok(phoneEntry, 'the newly registered phone identity should appear in the list');
+  assert.ok(deviceEntry, 'the newly registered device identity should appear in the list');
+  assert.equal(deviceEntry.kind, 'device');
+  assert.equal(phoneEntry.kind, 'phone');
+  assert.equal(deviceEntry.public_key, undefined, 'the list view should not include public keys');
+});
+
 test('GET /admin/identities/:deviceId 404s for an unregistered deviceId', async () => {
   const res = await fetch(`${server.baseUrl}/admin/identities/never-registered`, {
     headers: { Authorization: `Bearer ${adminToken}` }

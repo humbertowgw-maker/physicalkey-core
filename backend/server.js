@@ -9,7 +9,7 @@ import { validatePhoneAttestation } from './auth/phone-auth.js';
 import { validateDeviceSignature, registerDevice } from './auth/device-auth.js';
 import { grantGitAccess, parseBasicAuth, validateGitCredentials, revokeGitAccess } from './git/git-credentials.js';
 import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
-import { getIdentity, resetIdentity, revokeSessionsIssuedBefore, isSessionRevoked } from './auth/identity-admin.js';
+import { getIdentity, listIdentities, resetIdentity, revokeSessionsIssuedBefore, isSessionRevoked } from './auth/identity-admin.js';
 import { logAdminAction, getAdminActionLog, getOrgActionLog } from './audit/log.js';
 import { isValidRatchetStatus, recordRatchetStatus, getRatchetState, clearRatchetState, verifyAndRecordRatchetAttestation } from './auth/ratchet.js';
 import {
@@ -516,6 +516,14 @@ const requireAdmin = (req, res, next) => {
 
 app.get('/admin/forensics', requireAdmin, (req, res) => {
   res.json(getForensicsReport());
+});
+
+// List every currently-registered identity (phone or device), lightest shape (no public
+// key). Read-only, admin-gated. Previously the only way to check what's registered was a
+// single-deviceId lookup — no way to audit the full set without already knowing every
+// deviceId to ask about. Needed to safely populate the device allow-list without guessing.
+app.get('/admin/identities', requireAdmin, (req, res) => {
+  res.json({ identities: listIdentities() });
 });
 
 // Inspect one identity's trust-on-first-use registration (phone or device). Read-only —

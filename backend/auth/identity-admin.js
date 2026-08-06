@@ -12,9 +12,17 @@ import db from '../lib/db.js';
 // trust-on-first-use again, without touching anything else in the system.
 const getIdentityStmt = db.prepare('SELECT device_id, kind, public_key, platform, registered_at, last_seen, access_count, status FROM identities WHERE device_id = ?');
 const deleteIdentityStmt = db.prepare('DELETE FROM identities WHERE device_id = ?');
+// Deliberately omits public_key — this is for auditing which deviceIds exist (e.g. before
+// populating the device allow-list), not inspecting one's registration in detail. The
+// existing single-deviceId lookup above still returns the full record including the key.
+const listIdentitiesStmt = db.prepare('SELECT device_id, kind, platform, registered_at, last_seen, access_count, status FROM identities ORDER BY registered_at ASC');
 
 export function getIdentity(deviceId) {
   return getIdentityStmt.get(deviceId) ?? null;
+}
+
+export function listIdentities() {
+  return listIdentitiesStmt.all();
 }
 
 export function resetIdentity(deviceId) {
