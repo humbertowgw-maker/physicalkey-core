@@ -47,12 +47,18 @@ below. Commit `5cff987`.
   risking the exact class of lockout/mixup bug this project has already been hit by twice
   (the TOFU identity lockout, the BLE-bond lockout after a board erase). Protecting the
   pairings that already work took priority over closing this gap partially and riskily.
-- **Still pending, deliberately**: production `SECRET_KEY` was accidentally printed into an
-  assistant session while checking Railway's variables (a redaction regex didn't match
-  Railway CLI's actual table formatting). The user asked to hold off rotating it until an
-  ideal moment — not immediately, to avoid invalidating live session tokens mid-test — but
-  it should still happen before too long. Rotate via a fresh `crypto.randomBytes(48)`, set
-  on Railway, redeploy, then do one live auth check to confirm health post-rotation.
+- **`SECRET_KEY` rotated (2026-08-06).** It had been accidentally printed into an assistant
+  session earlier while checking Railway's variables (a redaction regex didn't match Railway
+  CLI's actual table formatting). Held deliberately until the user gave the go-ahead, then
+  rotated: fresh `crypto.randomBytes(48)`, generated and set on Railway in one step (`railway
+  variables --set "SECRET_KEY=$(node -e '...')"`) so the raw value was never displayed or
+  logged anywhere, including here. Redeployed automatically (new deployment ID `e143dafc`),
+  settled clean — no crash-loop confirms the fail-loud `SECRET_KEY`-missing check passed at
+  boot. Verified live: `/health` returns 200, and a full phone-challenge → phone-verify →
+  device-verify → sessionToken → authenticated-request flow succeeds end to end under the
+  new secret. Any session tokens issued before the rotation are now invalid (the intended
+  effect); `sessionToken` is in-memory-only on the phone with no persistence, so this just
+  means the next app open re-authenticates normally, nothing lost.
 
 ## Security audit + fixes: three phases, all shipped (2026-08-05, later the same day)
 
