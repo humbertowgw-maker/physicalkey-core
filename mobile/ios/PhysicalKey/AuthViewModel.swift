@@ -12,6 +12,7 @@ final class AuthViewModel: ObservableObject {
         case connectingToDevice
         case authenticated(sessionToken: String)
         case failed(String)
+        case repairing
     }
 
     @Published private(set) var stage: Stage = .notReady
@@ -113,6 +114,45 @@ final class AuthViewModel: ObservableObject {
             } catch {
                 log("Device auth failed: \(error)")
                 stage = .failed(Self.describe(error, action: "connect to the key device"))
+            }
+        }
+    }
+
+    /// Self-service identity repair (see backend/auth/repair.js and mobile/ios's
+    /// PhysicalKeyAPI.repairChallenge/repairVerify) — for when this phone's own identity
+    /// is stuck (Face ID was reset, or this is a replacement phone that restored the old
+    /// UserDefaults-persisted deviceId from a backup but has no matching Keychain key).
+    /// Connects to the SAME physical board this identity was originally paired with and
+    /// has it sign a repair authorization — no admin needed, and no new firmware: the
+    /// board just signs the challenge via the exact same Challenge/Signature
+    /// characteristics `connectAndAuthenticateDevice` already uses for ordinary auth.
+    /// Only creates a new local key AFTER the backend confirms the old registration was
+    /// actually cleared — never generates one speculatively.
+    func repairViaPhysicalKey() {
+        Task {
+            stage = .repairing
+            do {
+                log("Scanning for your PhysicalKey device to authorize a repair…")
+                let board = try await bluetooth.connectToDevice()
+                log("Connected to \(board.deviceId)")
+
+                let challenge = try await api.repairChallenge(boardDeviceId: board.deviceId, targetPhoneDeviceId: keyManager.deviceId)
+                log("Got repair challenge")
+
+                let boardSignature = try await bluetooth.sign(challenge: challenge.challenge)
+                log("Board authorized the repair")
+
+                let result = try await api.repairVerify(challengeId: challenge.challengeId, boardSignature: boardSignature)
+                log("Repair complete — \(result.deviceId)'s old registration was cleared")
+
+                bluetooth.disconnect()
+
+                let publicKey = try keyManager.createIdentity()
+                log("New identity created. Public key: \(publicKey.prefix(16))…")
+                stage = .ready
+            } catch {
+                log("Repair failed: \(error)")
+                stage = .failed(Self.describe(error, action: "repair via your physical key"))
             }
         }
     }

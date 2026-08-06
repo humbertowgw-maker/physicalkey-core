@@ -238,6 +238,39 @@ struct PhysicalKeyAPI {
         try await get("/api/profile", bearer: sessionToken)
     }
 
+    // MARK: - Self-service repair
+    // See backend/auth/repair.js. No bearer token on either call — proof of physical
+    // possession of a board with real pairing history to the target identity IS the
+    // authorization, not a session. `challenge` gets relayed as-is to the connected
+    // board's existing Challenge characteristic (DeviceBluetoothManager.sign(challenge:)),
+    // exactly like a normal device-verify signature — no new BLE plumbing needed.
+
+    struct RepairChallengeResponse: Decodable {
+        let challengeId: String
+        let challenge: String
+        let expiresIn: Int
+    }
+
+    struct RepairVerifyResponse: Decodable {
+        let status: String
+        let deviceId: String
+        let authorizedByBoard: String
+    }
+
+    func repairChallenge(boardDeviceId: String, targetPhoneDeviceId: String) async throws -> RepairChallengeResponse {
+        try await post("/auth/repair/challenge", body: [
+            "boardDeviceId": boardDeviceId,
+            "targetPhoneDeviceId": targetPhoneDeviceId
+        ])
+    }
+
+    func repairVerify(challengeId: String, boardSignature: String) async throws -> RepairVerifyResponse {
+        try await post("/auth/repair/verify", body: [
+            "challengeId": challengeId,
+            "boardSignature": boardSignature
+        ])
+    }
+
     private func post<T: Decodable>(_ path: String, body: [String: Any], bearer: String? = nil) async throws -> T {
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"

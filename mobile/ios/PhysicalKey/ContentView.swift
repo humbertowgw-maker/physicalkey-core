@@ -89,6 +89,9 @@ struct ContentView: View {
             Label(message, systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.red)
                 .font(.footnote)
+        case .repairing:
+            Label("Authorizing repair with your physical key…", systemImage: "wave.3.right")
+                .foregroundStyle(.blue)
         }
     }
 
@@ -102,14 +105,22 @@ struct ContentView: View {
             Button("Authenticate with Face ID") { viewModel.authenticatePhone() }
                 .buttonStyle(.borderedProminent)
         case .failed:
-            if viewModel.hasIdentity {
-                Button("Authenticate with Face ID") { viewModel.authenticatePhone() }
-                    .buttonStyle(.borderedProminent)
-            } else {
-                Button("Create Identity") { viewModel.createIdentity() }
-                    .buttonStyle(.borderedProminent)
+            VStack(spacing: 12) {
+                if viewModel.hasIdentity {
+                    Button("Authenticate with Face ID") { viewModel.authenticatePhone() }
+                        .buttonStyle(.borderedProminent)
+                    // Surfaced here specifically: hasIdentity being true after a failure
+                    // is exactly the "a local key exists but the backend doesn't recognize
+                    // it" symptom — a stuck registration, not a wrong password. Retrying
+                    // Face ID alone would just fail identically again.
+                    Button("Repair with Physical Key") { viewModel.repairViaPhysicalKey() }
+                        .buttonStyle(.bordered)
+                } else {
+                    Button("Create Identity") { viewModel.createIdentity() }
+                        .buttonStyle(.borderedProminent)
+                }
             }
-        case .phoneVerifying, .connectingToDevice:
+        case .phoneVerifying, .connectingToDevice, .repairing:
             ProgressView()
         case .phoneVerified:
             Button("Connect to Key Device") { viewModel.connectAndAuthenticateDevice() }
