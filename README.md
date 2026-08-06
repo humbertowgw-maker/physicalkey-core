@@ -21,18 +21,12 @@ The result is designed to resist cloning, theft, and forgery for:
 - Cryptocurrency wallets
 - Government and enterprise authentication
 
-## Why PhysicalKey?
+## Current Scope
 
-| Feature | YubiKey | Apple Secure Enclave | PhysicalKey |
-| --- | --- | --- | --- |
-| Cryptographic auth | ✓ | ✓ | ✓ |
-| Biometric on device | ✗ | ✓ | ✓ (Pro+) |
-| Hardware key required | ✓ | ✗ | ✓ |
-| Phone + device combo | ✗ | ✗ | ✓ |
-| Three-factor auth | ✗ | ✗ | ✓ |
-| Door locks | ✗ | ✗ | ✓ (Roadmap) |
-| Audit trail | ✗ | ✗ | ✓ |
-| Price | $120 | $799 | $49–449 |
+PhysicalKey currently combines phone biometric approval, an ESP32 hardware device,
+Ed25519 challenge-response, backend verification, organization controls, and audit
+records. Device-side biometrics and door-lock integrations are roadmap items, not
+features in the current beta.
 
 ## How It Works
 
@@ -54,7 +48,8 @@ Threat model highlights:
 - Stolen phone: no hardware device, so authentication cannot complete
 - Stolen device: no Face ID, so the phone remains locked
 - Cloned device: signature verification fails
-- BLE interception: LE Secure Connections encrypts transport
+- Passive BLE interception: LE Secure Connections encrypts transport
+- Active BLE man-in-the-middle attacks: the current Just Works pairing mode does not provide authenticated MITM protection
 - Compromised backend: identities can be revoked and the audit log records activity
 
 ## Architecture
@@ -91,18 +86,16 @@ Threat model highlights:
 
 ### Prerequisites
 
-- iPhone (iOS 15+)
+- iPhone (iOS 17+)
 - ESP32-DevKitC-32D board
 - Micro USB cable
 - Mac with Xcode 15+
 
-### For Users (TestFlight Beta)
+### For Users (Planned TestFlight Beta)
 
-1. Join the TestFlight beta (link coming).
-2. Download the PhysicalKey app.
-3. Power on your PhysicalKey device.
-4. Open the app and choose **Add Device**.
-5. Approve with Face ID.
+TestFlight distribution is not available yet. The current iOS app is installed
+directly from Xcode on a trusted development device. Follow the
+[PhysicalKey website](https://physicalkey.whitegwireless.com) for future beta access.
 
 ### For Developers (Self-Hosted)
 
