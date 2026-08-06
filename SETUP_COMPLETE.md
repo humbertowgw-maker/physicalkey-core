@@ -19,23 +19,22 @@ below. Commit `5cff987`.
   identity and confirm which two are real hardware vs. this week's test/smoke-script noise:
   `physicalkey-device-680947e03c9c` (the hardened prototype board, `access_count: 16`) and
   `physicalkey-device-680947e00800` (the spare board, `access_count: 13`). 74/74 tests pass.
-- **Device allow-list: populated, deliberately NOT yet enforced.** Both real board IDs above
-  are on the allow-list (`POST /admin/device-allowlist`, confirmed via `GET
-  /admin/device-allowlist`). `ENFORCE_DEVICE_ALLOWLIST` is still unset on Railway — left off
-  on purpose so the user can turn it on himself when ready to actually test the enforcement
-  behavior, not because anything is blocking it. **A third ESP32 board exists but is
-  unflashed and unpaired** — confirmed directly with the user. This doesn't matter today
-  (an unregistered board can't be affected by the allow-list either way), but it WILL matter
-  the moment it's flashed and paired: with enforcement on, that board's very first
-  connection attempt will be rejected unless its deviceId is added to the allow-list
-  *first*. To find its deviceId before pairing: read it off the serial monitor at boot
+- **Device allow-list: populated AND enforced, as of 2026-08-06.** Both real board IDs above
+  are on the allow-list (`POST /admin/device-allowlist`). `ENFORCE_DEVICE_ALLOWLIST=true` is
+  now set on Railway (the user set it directly, then it was verified two ways: live, a
+  brand-new non-allow-listed deviceId attempting to register now gets `401 Device
+  verification failed`, where before it would have silently succeeded via TOFU; and by
+  source — the allow-list check in `auth/device-auth.js` only runs inside the `if (!device)`
+  branch, so an already-registered deviceId like either real board never touches that check
+  at all, not just "probably fine"). Actual BLE pairing against the physical boards wasn't
+  re-tested (needs physical hardware), but is structurally unaffected per the above.
+  **A third ESP32 board exists but is unflashed and unpaired** — confirmed directly with the
+  user. With enforcement now on, that board's very first connection attempt WILL be
+  rejected unless its deviceId is added to the allow-list *first*, once it's flashed. To
+  find its deviceId before pairing: read it off the serial monitor at boot
   (`physicalkey-device-<12 hex chars from esp_efuse_mac_get_default>`, see
-  `hardware/firmware-idf/PhysicalKeyDevice/main/identity.cpp`), or — with enforcement
-  temporarily off — just pair it once and re-run `GET /admin/identities` to see what
-  deviceId it registered as. **When enforcement does get turned on**: `railway variables
-  --set "ENFORCE_DEVICE_ALLOWLIST=true"` from `backend/`, then `railway up --detach -y`
-  and confirm via `railway status` that the deploy actually settles (not just `Online`
-  mid-build — see the troubleshooting note below on why that's not sufficient).
+  `hardware/firmware-idf/PhysicalKeyDevice/main/identity.cpp`), then `POST
+  /admin/device-allowlist` with it before ever attempting a real pairing.
 - **BLE first-pairing MITM protection: confirmed still open, deliberately staying deferred.**
   Read directly from `hardware/firmware-idf/PhysicalKeyDevice/main/main.cpp:234-238`:
   `sm_io_cap = BLE_SM_IO_CAP_NO_IO`, `sm_mitm = 0`, `sm_sc = 1` — LE Secure Connections
