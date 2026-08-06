@@ -12,9 +12,30 @@ backend/keys/
 # SQLite persistence (device/git/honeypot state — local runtime data, not source)
 backend/data/
 
-# Logs
-*.log
+# Node logs and package manager artifacts
 npm-debug.log*
+*.log
+
+# iOS / Xcode
+build/
+*.xcarchive
+*.ipa
+Pods/
+DerivedData/
+
+# Hardware / ESP-IDF / PlatformIO
+sdkconfig.old
+*.o
+*.a
+.pio/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # OS
 .DS_Store
+Thumbs.db
