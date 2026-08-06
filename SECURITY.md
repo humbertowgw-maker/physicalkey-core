@@ -22,13 +22,22 @@ We'll respond within 48 hours and coordinate a fix before public disclosure.
 - Device identity (Ed25519 private key, encrypted at rest)
 - Challenge-response authentication (cryptographically verified)
 - Organization/team isolation (backend enforced)
-- Audit trail (immutable logs of every auth attempt)
+- Audit trail (every admin action and auth attempt logged, queryable)
+- Per-identity recovery policy — a `permanent` identity is code-enforced as
+  unresettable, with no admin override path anywhere in the code
 
 ### What's Not Protected (Yet)
 
+- Tamper-evident audit log — today's logs are ordinary database rows with no
+  hash-chaining or external mirror, so a backend compromise could erase its own
+  trail (not "immutable" until this is addressed)
+- KMS-backed signing key (backend compromise could otherwise mint arbitrary
+  sessions) (roadmap: 2027)
+- BLE out-of-band pairing — first-time pairing has no protection against an
+  active attacker present at that exact moment (needs a per-unit passkey, a
+  packaging decision, not just code)
 - Quantum-resistant cryptography (roadmap: 2027)
 - Hardware tamper detection (roadmap: PKA Ultra)
-- KMS integration (roadmap: 2027)
 
 ## Audit Status
 
