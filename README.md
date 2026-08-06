@@ -58,11 +58,15 @@ Threat model highlights:
 
 - Ed25519 challenge-response authentication
 - Multi-tenant organization and team management
-- Device provenance tracking and anti-clone controls
-- Session-ratchet state machine
+- Device provenance tracking and anti-clone controls (admin allow-list, enforced)
+- Session-ratchet state machine, backend-verified (not client-asserted)
 - Honeypot forensics system
 - Git credential issuance tied to verified device sessions
 - Audit log and admin recovery tooling
+- Per-identity recovery policy: `permanent` identities are code-enforced as
+  unresettable (no admin override exists in the code path); `self-service` identities
+  can be re-paired via a board-signed proof of physical possession, with no admin
+  involved
 
 ### Hardware (ESP32-DevKitC-32D, ESP-IDF)
 
@@ -131,6 +135,9 @@ See [SETUP_COMPLETE.md](./SETUP_COMPLETE.md) for the current setup and validatio
 - Backend-enforced organization and team isolation
 - Device binding and provenance checks
 - Audit records for authentication attempts
+- A `permanent` recovery policy is a literal, code-level guarantee, not a promise —
+  the admin reset endpoint refuses to touch it, with no override path anywhere in
+  the code
 
 ### What's Not Protected Yet
 
