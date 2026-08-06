@@ -156,6 +156,21 @@ db.exec(`
     verified_by TEXT NOT NULL DEFAULT 'server',
     updated_at INTEGER NOT NULL
   );
+
+  -- Real phone<->board pairing history, for personal (non-org) devices — nothing else
+  -- tracks this today (org devices have explicit device_access grants, but a Solo
+  -- device's "who has actually used this" was previously implicit and unrecorded).
+  -- Written on every successful /auth/device/verify. This is what self-service repair
+  -- (auth/repair.js) checks before letting a board vouch for resetting a phone identity —
+  -- without it, ANY registered board could free up ANY phone's identity, not just one it
+  -- has a real history with.
+  CREATE TABLE IF NOT EXISTS device_phone_pairings (
+    device_id TEXT NOT NULL,
+    phone_device_id TEXT NOT NULL,
+    first_paired_at INTEGER NOT NULL,
+    last_seen_at INTEGER NOT NULL,
+    PRIMARY KEY (device_id, phone_device_id)
+  );
 `);
 
 // Migration for a database created before next_proof/verified_by/'unverifiable' existed

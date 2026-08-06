@@ -18,6 +18,7 @@ import {
   listDeviceAccess, grantDeviceAccess, revokeDeviceAccess, isAuthorizedForDevice
 } from './auth/organizations.js';
 import { isEnforced as isAllowlistEnforced, addToAllowlist, removeFromAllowlist, listAllowlist } from './auth/device-allowlist.js';
+import { recordPairing, hasEverPaired, createRepairChallenge, consumeRepairChallenge, verifyBoardSignature } from './auth/repair.js';
 
 dotenv.config();
 
@@ -240,6 +241,12 @@ app.post('/auth/device/verify', authRateLimit, honeypotLogger, async (req, res) 
       return res.status(403).json({ error: 'This phone is not authorized to use this device' });
     }
 
+    // Real pairing history, for self-service repair (auth/repair.js) to check before
+    // letting a board vouch for resetting a phone's identity — without this, any
+    // registered board could free up any phone identity, not just one it's actually
+    // been used with.
+    recordPairing(deviceId, stored.phoneAttestation.deviceId);
+
     // Session-ratchet continuity result (see the security-layers plan). The device signs
     // the exchange output with its existing Ed25519 identity key, bound to this session's
     // challenge — the backend verifies that signature and computes the verdict itself
@@ -292,6 +299,102 @@ app.post('/auth/device/verify', authRateLimit, honeypotLogger, async (req, res) 
     console.error('Device verify error:', error);
     res.status(500).json({ error: 'Server error' });
   }
+});
+
+// Self-service identity repair (see auth/repair.js): step 1 of 2. Requests a
+// domain-separated challenge for the phone to relay to the board over BLE — written to
+// the board's existing Challenge characteristic (the same one every normal login already
+// uses), signed with its Ed25519 identity key, read back from Signature. No new firmware
+// needed. Public — proof of physical possession of a board with real pairing history to
+// this exact phone identity IS the authorization, same trust model as the admin escape
+// hatch just without needing an admin.
+app.post('/auth/repair/challenge', authRateLimit, honeypotLogger, (req, res) => {
+  const { boardDeviceId, targetPhoneDeviceId } = req.body;
+  if (!boardDeviceId || !targetPhoneDeviceId) {
+    return res.status(400).json({ error: 'boardDeviceId and targetPhoneDeviceId are required' });
+  }
+
+  const board = getIdentity(boardDeviceId);
+  if (!board || board.kind !== 'device' || board.status !== 'active') {
+    activateHoneypot(getClientIp(req), 'Repair challenge requested for an unknown/invalid board', { boardDeviceId });
+    return res.status(404).json({ error: 'Unknown board' });
+  }
+
+  const target = getIdentity(targetPhoneDeviceId);
+  if (!target || target.kind !== 'phone') {
+    return res.status(404).json({ error: 'No phone identity registered for this deviceId' });
+  }
+  if (target.recovery_policy === 'permanent') {
+    return res.status(403).json({ error: `${targetPhoneDeviceId} has recovery_policy='permanent' — this identity cannot be repaired, self-service or otherwise` });
+  }
+
+  if (!hasEverPaired(boardDeviceId, targetPhoneDeviceId)) {
+    activateHoneypot(getClientIp(req), 'Repair challenge requested for a board with no real pairing history to this phone identity', { boardDeviceId, targetPhoneDeviceId });
+    return res.status(403).json({ error: 'This board has no recorded pairing history with this phone identity' });
+  }
+
+  const { challengeId, challenge } = createRepairChallenge(boardDeviceId, targetPhoneDeviceId);
+  res.json({ challengeId, challenge, expiresIn: 120 });
+});
+
+// Self-service identity repair, step 2 of 2. Verifies the board's signature over the
+// exact challenge issued above, then — if valid — resets the target phone identity via
+// the same resetIdentity() the admin escape hatch uses, with the same side effects
+// (clears ratchet state, revokes git access, revokes any live session). The phone then
+// just goes through the completely ordinary /auth/phone + /auth/device flow next; nothing
+// about registering the new key is special-cased here.
+app.post('/auth/repair/verify', authRateLimit, honeypotLogger, (req, res) => {
+  const { challengeId, boardSignature } = req.body;
+  const stored = consumeRepairChallenge(challengeId);
+  if (!stored) {
+    return res.status(401).json({ error: 'Repair challenge expired or not found' });
+  }
+
+  const board = getIdentity(stored.boardDeviceId);
+  if (!board) {
+    return res.status(404).json({ error: 'Board no longer registered' });
+  }
+
+  if (!boardSignature || !verifyBoardSignature(stored.challenge, boardSignature, board.public_key)) {
+    activateHoneypot(getClientIp(req), 'Repair authorization signature invalid — possible forged board proof', {
+      boardDeviceId: stored.boardDeviceId,
+      targetPhoneDeviceId: stored.targetPhoneDeviceId
+    });
+    return res.status(401).json({ error: 'Invalid board signature' });
+  }
+
+  let removed;
+  try {
+    removed = resetIdentity(stored.targetPhoneDeviceId);
+  } catch (err) {
+    if (err instanceof RecoveryPolicyLockedError) {
+      return res.status(403).json({ error: err.message });
+    }
+    throw err;
+  }
+  if (!removed) {
+    return res.status(404).json({ error: 'No identity registered for this deviceId' });
+  }
+
+  const clearedRatchet = clearRatchetState(stored.targetPhoneDeviceId);
+  const revokedGitAccess = revokeGitAccess(stored.targetPhoneDeviceId);
+  const revokedSessionsAt = revokeSessionsIssuedBefore(stored.targetPhoneDeviceId);
+  console.log(`⚠ Self-service repair: ${stored.targetPhoneDeviceId} reset via board ${stored.boardDeviceId}`);
+  logAdminAction(stored.boardDeviceId, 'self_service_repair', stored.targetPhoneDeviceId, {
+    authorizedByBoard: stored.boardDeviceId,
+    clearedRatchetStatus: clearedRatchet?.status ?? null,
+    revokedGitAccess,
+    revokedSessionsAt
+  });
+
+  res.json({
+    status: 'reset',
+    deviceId: stored.targetPhoneDeviceId,
+    authorizedByBoard: stored.boardDeviceId,
+    clearedRatchetStatus: clearedRatchet?.status ?? null,
+    revokedGitAccess,
+    revokedSessionsAt
+  });
 });
 
 // Protected endpoint
