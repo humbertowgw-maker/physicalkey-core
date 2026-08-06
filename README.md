@@ -1,9 +1,11 @@
 # PhysicalKey
 
-**Unbreakable hardware + phone authentication. Three-factor crypto. Zero trust, everywhere.**
+**Hardware + phone authentication with cryptographic verification.**
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Status](https://img.shields.io/badge/status-beta-orange.svg)
+
+> **Project status:** First public beta. This is an early version for development and evaluation, not a finished or production-ready security product.
 
 ## What is PhysicalKey?
 
