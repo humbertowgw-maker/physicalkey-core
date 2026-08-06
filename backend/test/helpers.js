@@ -28,7 +28,7 @@ export function sign(privateKey, message) {
  * restart, not just stay in memory); `startServer()` below is the convenience wrapper
  * for everything else, which allocates a fresh throwaway directory and cleans it up.
  */
-export async function spawnServerAt(dataDir, { port, adminDeviceId } = {}) {
+export async function spawnServerAt(dataDir, { port, adminDeviceId, env = {} } = {}) {
   port ??= 4000 + Math.floor(Math.random() * 5000);
   adminDeviceId ??= `test-admin-device-${crypto.randomBytes(4).toString('hex')}`;
 
@@ -39,7 +39,8 @@ export async function spawnServerAt(dataDir, { port, adminDeviceId } = {}) {
       PK_DATA_DIR: dataDir,
       SECRET_KEY: 'test-secret-key-not-for-production',
       ADMIN_DEVICE_ID: adminDeviceId,
-      NODE_ENV: 'test'
+      NODE_ENV: 'test',
+      ...env
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -78,9 +79,9 @@ export async function spawnServerAt(dataDir, { port, adminDeviceId } = {}) {
  * not the real dev database and never production. Each test file gets its own instance
  * (own port, own data dir) so files can run in parallel without interfering.
  */
-export async function startServer() {
+export async function startServer(options = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'physicalkey-test-'));
-  const instance = await spawnServerAt(dataDir);
+  const instance = await spawnServerAt(dataDir, options);
   return {
     ...instance,
     async stop() {

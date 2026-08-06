@@ -17,6 +17,7 @@ import {
   getDeviceOrg, listOrgDevices, addDeviceToOrg, removeDeviceFromOrg,
   listDeviceAccess, grantDeviceAccess, revokeDeviceAccess, isAuthorizedForDevice
 } from './auth/organizations.js';
+import { isEnforced as isAllowlistEnforced, addToAllowlist, removeFromAllowlist, listAllowlist } from './auth/device-allowlist.js';
 
 dotenv.config();
 
@@ -568,6 +569,33 @@ app.delete('/admin/identities/:deviceId', requireAdmin, (req, res) => {
 // deviceId, and when. Read-only; entries are written by the actions themselves.
 app.get('/admin/audit-log', requireAdmin, (req, res) => {
   res.json({ entries: getAdminActionLog() });
+});
+
+// Interim device-provenance allow-list (see auth/device-allowlist.js). Enforcement itself
+// is controlled by the ENFORCE_DEVICE_ALLOWLIST env var, checked in device-auth.js — these
+// endpoints just manage the list, and work the same whether or not enforcement is on, so
+// the list can be populated ahead of flipping enforcement on.
+app.get('/admin/device-allowlist', requireAdmin, (req, res) => {
+  res.json({ enforced: isAllowlistEnforced(), entries: listAllowlist() });
+});
+
+app.post('/admin/device-allowlist', requireAdmin, (req, res) => {
+  const { deviceId, note } = req.body;
+  if (!deviceId || typeof deviceId !== 'string') {
+    return res.status(400).json({ error: 'deviceId is required' });
+  }
+  const entry = addToAllowlist(deviceId, note ?? null);
+  logAdminAction(req.deviceId, 'device_allowlist_added', deviceId, { note: note ?? null });
+  res.status(201).json(entry);
+});
+
+app.delete('/admin/device-allowlist/:deviceId', requireAdmin, (req, res) => {
+  const removed = removeFromAllowlist(req.params.deviceId);
+  if (!removed) {
+    return res.status(404).json({ error: 'deviceId is not on the allow-list' });
+  }
+  logAdminAction(req.deviceId, 'device_allowlist_removed', req.params.deviceId, {});
+  res.json({ status: 'removed', deviceId: req.params.deviceId });
 });
 
 // Honeypot decoy endpoint

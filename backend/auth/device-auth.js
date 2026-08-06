@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import db from '../lib/db.js';
+import { isEnforced, isDeviceAllowed } from './device-allowlist.js';
 
 const getDeviceStmt = db.prepare('SELECT * FROM identities WHERE device_id = ? AND kind = ?');
 const insertDeviceStmt = db.prepare(`
@@ -32,6 +33,22 @@ export async function validateDeviceSignature(challenge, deviceSignatureB64, dev
       // (hijack) a deviceId that already has a trusted key on file.
       if (!publicKeyB64) {
         console.error(`Unknown device ${deviceId} did not supply a publicKey for registration`);
+        return false;
+      }
+      // Interim provenance check (see device-allowlist.js) — only gates a NEW deviceId's
+      // very first registration, never an already-registered device. Off by default
+      // (ENFORCE_DEVICE_ALLOWLIST unset in dev/test); the client-facing failure is
+      // deliberately identical to any other rejected registration, not a distinct error —
+      // telling an unauthenticated caller "that deviceId isn't on the allow list" would let
+      // them enumerate which deviceIds are considered real.
+      //
+      // ADMIN_DEVICE_ID is exempt: it's already a separately-configured, deployer-controlled
+      // value (an env var only the deployer sets), so exempting it isn't a new trust grant —
+      // it's what breaks the bootstrap deadlock of "enforcement is on, but nothing has ever
+      // been added to the allow-list yet, including the admin device needed to add anything
+      // to it in the first place."
+      if (isEnforced() && deviceId !== process.env.ADMIN_DEVICE_ID && !isDeviceAllowed(deviceId)) {
+        console.error(`✗ Device ${deviceId} rejected: not on the allow-list (ENFORCE_DEVICE_ALLOWLIST=true)`);
         return false;
       }
       device = registerDevice(deviceId, publicKeyB64);

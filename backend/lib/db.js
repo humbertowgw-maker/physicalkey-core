@@ -122,6 +122,21 @@ db.exec(`
     revoked_at INTEGER NOT NULL
   );
 
+  -- Interim device provenance control (see hardware/README.md's audit gap notes): trust-
+  -- on-first-use alone means "has a keypair" and "is a real physical ESP32 board" are the
+  -- same claim, which they aren't — anyone can register a plausible-looking deviceId as a
+  -- new "device". This is a cheap stopgap until real factory-provisioned certs exist: an
+  -- admin-managed allow-list of known-real deviceIds (their eFuse-MAC-derived IDs), checked
+  -- only when ENFORCE_DEVICE_ALLOWLIST=true (off by default — unset in dev/test, so this
+  -- never affects the existing test suite's dynamically-created device identities; set only
+  -- on the real production deployment once populated). Only gates NEW device registration —
+  -- already-registered devices and all phone identities are unaffected either way.
+  CREATE TABLE IF NOT EXISTS device_allowlist (
+    device_id TEXT PRIMARY KEY,
+    note TEXT,
+    added_at INTEGER NOT NULL
+  );
+
   -- Session-ratchet continuity state (see the security-layers plan) for a device that's
   -- reported a ratchet result at least once. Absence of a row here is NOT a signal — it just
   -- means bootstrap (first session, or state was legitimately lost to a re-flash/reinstall).
