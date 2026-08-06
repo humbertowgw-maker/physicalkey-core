@@ -64,6 +64,142 @@ test('GET /admin/device-org/:deviceId surfaces the claiming org, its members, an
   assert.ok(body.members.find(m => m.device_id === ownerDeviceId && m.role === 'owner'));
 });
 
+test('DELETE /admin/device-org/:deviceId releases a claimed device, and rejects with no admin token', async () => {
+  const ownerDeviceId = 'device-org-release-owner';
+  const { phoneSessionToken: ownerToken } = await phoneAuth(server.baseUrl, ownerDeviceId, keypair());
+
+  const orgRes = await fetch(`${server.baseUrl}/orgs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+    body: JSON.stringify({ name: 'Release Test Org' })
+  });
+  const org = await orgRes.json();
+
+  const targetDeviceId = 'device-org-release-target';
+  await fullAuth(server.baseUrl, 'device-org-release-target-phone', keypair(), targetDeviceId, keypair());
+
+  await fetch(`${server.baseUrl}/orgs/${org.id}/devices`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+    body: JSON.stringify({ deviceId: targetDeviceId })
+  });
+
+  const unauth = await fetch(`${server.baseUrl}/admin/device-org/${targetDeviceId}`, { method: 'DELETE' });
+  assert.equal(unauth.status, 401);
+
+  let res = await fetch(`${server.baseUrl}/admin/device-org/${targetDeviceId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  let body = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(body.status, 'released');
+  assert.equal(body.previousOrgId, org.id);
+
+  // Confirmed released, not just a claimed success response.
+  res = await fetch(`${server.baseUrl}/admin/device-org/${targetDeviceId}`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  body = await res.json();
+  assert.equal(body.org, null);
+
+  // 404 on an already-unclaimed device, not a silent 200.
+  res = await fetch(`${server.baseUrl}/admin/device-org/${targetDeviceId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert.equal(res.status, 404);
+});
+
+test('new identities default to recovery_policy self-service, and reset works normally', async () => {
+  const targetDeviceId = 'recovery-default-target';
+  await fullAuth(server.baseUrl, 'recovery-default-phone', keypair(), targetDeviceId, keypair());
+
+  const res = await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  const body = await res.json();
+  assert.equal(body.recovery_policy, 'self-service');
+
+  const del = await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert.equal(del.status, 200, 'a self-service identity should still reset normally');
+});
+
+test('POST /admin/identities/:deviceId/recovery-policy sets it, and rejects invalid values / no token', async () => {
+  const targetDeviceId = 'recovery-policy-set-target';
+  await fullAuth(server.baseUrl, 'recovery-policy-set-phone', keypair(), targetDeviceId, keypair());
+
+  const unauth = await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}/recovery-policy`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recoveryPolicy: 'permanent' })
+  });
+  assert.equal(unauth.status, 401);
+
+  const invalid = await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}/recovery-policy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ recoveryPolicy: 'sometimes' })
+  });
+  assert.equal(invalid.status, 400);
+
+  const notFound = await fetch(`${server.baseUrl}/admin/identities/never-registered-xyz/recovery-policy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ recoveryPolicy: 'permanent' })
+  });
+  assert.equal(notFound.status, 404);
+
+  const res = await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}/recovery-policy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ recoveryPolicy: 'permanent' })
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(body.recovery_policy, 'permanent');
+});
+
+test('a permanent identity cannot be reset, cannot be un-permanented, and this is enforced by the code — not just documented', async () => {
+  const targetDeviceId = 'recovery-permanent-target';
+  await fullAuth(server.baseUrl, 'recovery-permanent-phone', keypair(), targetDeviceId, keypair());
+
+  await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}/recovery-policy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ recoveryPolicy: 'permanent' })
+  });
+
+  // The actual guarantee: DELETE refuses outright, no admin override path exists in code.
+  const del = await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert.equal(del.status, 403);
+
+  // Confirmed NOT deleted — a 403 that quietly still deleted it would be worse than useless.
+  const stillThere = await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  assert.equal(stillThere.status, 200);
+
+  // Cannot be walked back to self-service either — otherwise "permanent" would just mean
+  // "permanent until an admin flips the flag first," which defeats the point.
+  const revert = await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}/recovery-policy`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+    body: JSON.stringify({ recoveryPolicy: 'self-service' })
+  });
+  assert.equal(revert.status, 403);
+
+  const stillPermanent = await fetch(`${server.baseUrl}/admin/identities/${targetDeviceId}`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  const body = await stillPermanent.json();
+  assert.equal(body.recovery_policy, 'permanent');
+});
+
 test('GET /admin/identities lists every registered identity, without exposing public keys', async () => {
   const deviceId = 'list-target-device';
   await fullAuth(server.baseUrl, 'list-target-phone', keypair(), deviceId, keypair());

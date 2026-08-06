@@ -21,7 +21,8 @@ db.exec(`
     registered_at INTEGER NOT NULL,
     last_seen INTEGER NOT NULL,
     access_count INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'active'
+    status TEXT NOT NULL DEFAULT 'active',
+    recovery_policy TEXT NOT NULL DEFAULT 'self-service'
   );
 
   CREATE TABLE IF NOT EXISTS git_credentials (
@@ -184,6 +185,14 @@ if (!ratchetStateColumns.includes('next_proof')) {
 const adminActionsColumns = db.prepare("PRAGMA table_info(admin_actions)").all().map((c) => c.name);
 if (!adminActionsColumns.includes('org_id')) {
   db.exec('ALTER TABLE admin_actions ADD COLUMN org_id TEXT');
+}
+
+// Migration for a database created before identities had recovery_policy. SQLite applies
+// a column's DEFAULT to every existing row on ADD COLUMN, so every already-registered
+// identity gets 'self-service' — today's actual behavior — with no behavior change.
+const identitiesColumns = db.prepare("PRAGMA table_info(identities)").all().map((c) => c.name);
+if (!identitiesColumns.includes('recovery_policy')) {
+  db.exec("ALTER TABLE identities ADD COLUMN recovery_policy TEXT NOT NULL DEFAULT 'self-service'");
 }
 // Only safe to create once org_id is guaranteed to exist — on a fresh database this is a
 // no-op right after CREATE TABLE; on an existing one, only after the migration above.

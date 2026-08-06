@@ -9,7 +9,7 @@ import { validatePhoneAttestation } from './auth/phone-auth.js';
 import { validateDeviceSignature, registerDevice } from './auth/device-auth.js';
 import { grantGitAccess, parseBasicAuth, validateGitCredentials, revokeGitAccess } from './git/git-credentials.js';
 import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
-import { getIdentity, listIdentities, resetIdentity, revokeSessionsIssuedBefore, isSessionRevoked } from './auth/identity-admin.js';
+import { getIdentity, listIdentities, resetIdentity, setRecoveryPolicy, RecoveryPolicyLockedError, revokeSessionsIssuedBefore, isSessionRevoked } from './auth/identity-admin.js';
 import { logAdminAction, getAdminActionLog, getOrgActionLog } from './audit/log.js';
 import { isValidRatchetStatus, recordRatchetStatus, getRatchetState, clearRatchetState, verifyAndRecordRatchetAttestation } from './auth/ratchet.js';
 import {
@@ -545,6 +545,24 @@ app.get('/admin/device-org/:deviceId', requireAdmin, (req, res) => {
   });
 });
 
+// Admin escape hatch: release a device from its org without needing to authenticate as
+// that org's own owner/admin — same shape as the identity-reset and allow-list admin
+// overrides elsewhere in this file. Needed for exactly the case that motivated the GET
+// above: a device got claimed by an org (deliberately, during real feature testing) and
+// the claim was never released, silently blocking the device's actual intended owner.
+// Does NOT bypass org isolation for normal use — a regular member/owner still can't do
+// this for an org they don't belong to; this is the same narrowly-scoped, fully-audited
+// admin-only exception the rest of this file already uses for "the lock is correct in
+// general, but a specific case needs a deliberate, logged override."
+app.delete('/admin/device-org/:deviceId', requireAdmin, (req, res) => {
+  const removed = removeDeviceFromOrg(req.params.deviceId);
+  if (!removed) {
+    return res.status(404).json({ error: 'This device is not currently claimed by any org' });
+  }
+  logAdminAction(req.deviceId, 'admin_device_org_released', req.params.deviceId, { previousOrgId: removed.org_id });
+  res.json({ status: 'released', deviceId: req.params.deviceId, previousOrgId: removed.org_id });
+});
+
 // Inspect one identity's trust-on-first-use registration (phone or device). Read-only —
 // safe to call to check current state before deciding whether a reset is actually needed.
 app.get('/admin/identities/:deviceId', requireAdmin, (req, res) => {
@@ -553,6 +571,35 @@ app.get('/admin/identities/:deviceId', requireAdmin, (req, res) => {
     return res.status(404).json({ error: 'No identity registered for this deviceId' });
   }
   res.json({ ...identity, ratchet: getRatchetState(req.params.deviceId) });
+});
+
+// Sets an identity's recovery_policy. 'self-service' (the default for everything today)
+// means the admin reset above works as it always has. 'permanent' means the opposite: this
+// identity becomes genuinely unresettable by this codebase, not just discouraged — the
+// literal code-level backing for a "cannot be recovered, not even by us" product claim.
+// This is a ONE-WAY setting: setRecoveryPolicy refuses any change once an identity is
+// already 'permanent', including setting it to 'permanent' again — otherwise "permanent"
+// would just mean "permanent until someone flips the flag back first," which defeats the
+// entire point. There is deliberately no undo endpoint and no admin override for that.
+app.post('/admin/identities/:deviceId/recovery-policy', requireAdmin, (req, res) => {
+  const { recoveryPolicy } = req.body;
+  if (recoveryPolicy !== 'permanent' && recoveryPolicy !== 'self-service') {
+    return res.status(400).json({ error: "recoveryPolicy must be 'permanent' or 'self-service'" });
+  }
+  let updated;
+  try {
+    updated = setRecoveryPolicy(req.params.deviceId, recoveryPolicy);
+  } catch (err) {
+    if (err instanceof RecoveryPolicyLockedError) {
+      return res.status(403).json({ error: err.message });
+    }
+    throw err;
+  }
+  if (!updated) {
+    return res.status(404).json({ error: 'No identity registered for this deviceId' });
+  }
+  logAdminAction(req.deviceId, 'recovery_policy_set', req.params.deviceId, { recoveryPolicy });
+  res.json(updated);
 });
 
 // Resets one deviceId's trust-on-first-use registration, so its NEXT auth attempt
@@ -564,7 +611,15 @@ app.get('/admin/identities/:deviceId', requireAdmin, (req, res) => {
 // requires knowing the exact deviceId and full admin auth, and the NEXT registration is
 // itself still subject to trust-on-first-use (whoever registers next owns it).
 app.delete('/admin/identities/:deviceId', requireAdmin, (req, res) => {
-  const removed = resetIdentity(req.params.deviceId);
+  let removed;
+  try {
+    removed = resetIdentity(req.params.deviceId);
+  } catch (err) {
+    if (err instanceof RecoveryPolicyLockedError) {
+      return res.status(403).json({ error: err.message });
+    }
+    throw err;
+  }
   if (!removed) {
     return res.status(404).json({ error: 'No identity registered for this deviceId' });
   }
