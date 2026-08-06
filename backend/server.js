@@ -526,6 +526,25 @@ app.get('/admin/identities', requireAdmin, (req, res) => {
   res.json({ identities: listIdentities() });
 });
 
+// Diagnose a device's org claim and access grants without needing to already be a member
+// of whatever org claimed it — every /orgs/:orgId/* route requires org membership, which
+// is a real chicken-and-egg problem for an admin trying to figure out why a specific real
+// phone got "not authorized to use this device" and there's no other way to find out which
+// org is even responsible. Read-only.
+app.get('/admin/device-org/:deviceId', requireAdmin, (req, res) => {
+  const org = getDeviceOrg(req.params.deviceId);
+  if (!org) {
+    return res.json({ deviceId: req.params.deviceId, org: null });
+  }
+  res.json({
+    deviceId: req.params.deviceId,
+    org: getOrganization(org.org_id),
+    claimedAt: org.added_at,
+    members: listMembers(org.org_id),
+    deviceAccess: listDeviceAccess(org.org_id, req.params.deviceId)
+  });
+});
+
 // Inspect one identity's trust-on-first-use registration (phone or device). Read-only —
 // safe to call to check current state before deciding whether a reset is actually needed.
 app.get('/admin/identities/:deviceId', requireAdmin, (req, res) => {

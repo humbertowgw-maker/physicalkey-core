@@ -1,6 +1,6 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startServer, keypair, fullAuth } from './helpers.js';
+import { startServer, keypair, fullAuth, phoneAuth } from './helpers.js';
 
 let server;
 let adminToken;
@@ -18,6 +18,50 @@ test('GET/DELETE /admin/identities reject requests with no admin token', async (
 
   res = await fetch(`${server.baseUrl}/admin/identities/nonexistent`, { method: 'DELETE' });
   assert.equal(res.status, 401);
+});
+
+test('GET /admin/device-org/:deviceId reports no org for an unclaimed device, and rejects with no admin token', async () => {
+  const unauth = await fetch(`${server.baseUrl}/admin/device-org/nonexistent`);
+  assert.equal(unauth.status, 401);
+
+  const res = await fetch(`${server.baseUrl}/admin/device-org/never-claimed-device`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(body.org, null);
+});
+
+test('GET /admin/device-org/:deviceId surfaces the claiming org, its members, and access grants — without the admin needing org membership', async () => {
+  const ownerDeviceId = 'device-org-diag-owner';
+  const { phoneSessionToken: ownerToken } = await phoneAuth(server.baseUrl, ownerDeviceId, keypair());
+
+  const orgRes = await fetch(`${server.baseUrl}/orgs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+    body: JSON.stringify({ name: 'Diagnostic Test Org' })
+  });
+  const org = await orgRes.json();
+
+  const targetDeviceId = 'device-org-diag-target';
+  await fullAuth(server.baseUrl, 'device-org-diag-target-phone', keypair(), targetDeviceId, keypair());
+
+  await fetch(`${server.baseUrl}/orgs/${org.id}/devices`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+    body: JSON.stringify({ deviceId: targetDeviceId })
+  });
+
+  // The admin device is NOT a member of this org — this is exactly the scenario that
+  // motivated the endpoint: no other route can answer "which org claimed this device"
+  // without already being a member of it.
+  const res = await fetch(`${server.baseUrl}/admin/device-org/${targetDeviceId}`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(body.org.id, org.id);
+  assert.ok(body.members.find(m => m.device_id === ownerDeviceId && m.role === 'owner'));
 });
 
 test('GET /admin/identities lists every registered identity, without exposing public keys', async () => {
