@@ -11,6 +11,7 @@ COPY audit ./audit
 COPY git ./git
 COPY honeypot ./honeypot
 COPY lib ./lib
+COPY payments ./payments
 COPY scripts ./scripts
 
 # Persistent volume mounts here in production (see railway volume config) so the
