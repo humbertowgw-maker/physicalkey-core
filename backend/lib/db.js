@@ -1,14 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
-import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// Overridable so the test suite can point at an isolated, throwaway directory instead of
-// the real local/production data — unset in normal running (dev or Railway), so this is
-// a no-op there.
-const dataDir = process.env.PK_DATA_DIR || path.join(__dirname, '..', 'data');
-fs.mkdirSync(dataDir, { recursive: true });
+import { dataDir } from './data-dir.js';
 
 const db = new DatabaseSync(path.join(dataDir, 'physicalkey.db'));
 
@@ -171,6 +163,23 @@ db.exec(`
     last_seen_at INTEGER NOT NULL,
     PRIMARY KEY (device_id, phone_device_id)
   );
+
+  -- One row per Stripe subscription, kept in sync via the /billing/webhook handler (see
+  -- payments/stripe.js) so the backend has a fast local answer to "is this customer paid"
+  -- without calling out to Stripe on every request. Keyed by Stripe's own subscription id,
+  -- not email — an email can move between subscriptions (cancel, resubscribe) and this
+  -- keeps each of those as its own row rather than clobbering history.
+  CREATE TABLE IF NOT EXISTS subscriptions (
+    stripe_subscription_id TEXT PRIMARY KEY,
+    stripe_customer_id TEXT NOT NULL,
+    email TEXT,
+    plan TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(stripe_customer_id);
 `);
 
 // Migration for a database created before next_proof/verified_by/'unverifiable' existed

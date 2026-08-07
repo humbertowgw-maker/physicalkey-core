@@ -1,0 +1,26 @@
+services:
+  physicalkey:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - SECRET_KEY=${SECRET_KEY:?set SECRET_KEY in .env — see SELF_HOSTING.md}
+      - ADMIN_DEVICE_ID=${ADMIN_DEVICE_ID:?set ADMIN_DEVICE_ID in .env — see SELF_HOSTING.md}
+      - ENFORCE_DEVICE_ALLOWLIST=${ENFORCE_DEVICE_ALLOWLIST:-false}
+      - PK_BACKUP_RETAIN=${PK_BACKUP_RETAIN:-14}
+    volumes:
+      # Named volume, not a bind mount — survives `docker compose down` (without -v) and
+      # image rebuilds, matching the same durability the Railway volume gives the
+      # PK-hosted instance. This is the single thing that must never be lost: it holds
+      # physicalkey.db and its own backups/ subdirectory.
+      - pk-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  pk-data:
