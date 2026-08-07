@@ -7,8 +7,9 @@
   - `ContentView.swift` — the main auth flow UI, plus a "Team" toolbar button once a
     phone session exists.
   - `AuthViewModel.swift` — orchestrates the phone → Bluetooth → device → session flow.
-  - `KeyManager.swift` — Keychain-backed Ed25519 identity, Face ID/passcode-gated
-    (`.biometryCurrentSet`).
+  - `KeyManager.swift` — Secure-Enclave-resident P-256 identity
+    (`SecureEnclave.P256.Signing.PrivateKey`), Face ID/passcode-gated
+    (`.biometryCurrentSet`). **Not yet verified on real hardware** — see the note below.
   - `PhysicalKeyAPI.swift` — networking client for the backend
     (`https://physicalkey-core-production.up.railway.app`).
   - `DeviceBluetoothManager.swift` — CoreBluetooth client for the key fob.
@@ -16,11 +17,14 @@
     below).
 - **Runs on real physical iPhones**, not just the Simulator — installed and launched via
   `xcrun devicectl`, confirmed staying alive (not crash-looping) after launch.
-- **The full phone ↔ device ↔ backend auth flow is verified working**: real Face ID
-  prompt, real Keychain-backed Ed25519 signing, real BLE pairing with a physical ESP32
-  board (including BLE-level security — LE Secure Connections pairing, per-board
-  bonding, see `../../hardware/README.md`), real backend challenge/response, real
-  session issuance. This is not simulated or mocked at any layer.
+- **The full phone ↔ device ↔ backend auth flow was verified working pre-Secure-Enclave-
+  migration**: real Face ID prompt, real Keychain-backed Ed25519 signing, real BLE
+  pairing with a physical ESP32 board (including BLE-level security — LE Secure
+  Connections pairing, per-board bonding, see `../../hardware/README.md`), real backend
+  challenge/response, real session issuance, none of it simulated or mocked. `KeyManager`
+  has since moved to Secure-Enclave-resident P-256 (see the note below) — the device/BLE
+  side of this flow is untouched by that change, but the phone-signing step specifically
+  needs re-verification on real hardware.
 - **Team accounts work end to end**: create/join a team, add/remove members, grant/
   revoke per-device access, and claim a physical key device by scanning for it over
   Bluetooth (not typing in a device ID by hand — the app already knows how to discover
@@ -38,19 +42,28 @@
   `@preconcurrency import CoreBluetooth` (Apple's own framework isn't yet
   Sendable-audited — the documented bridge for this, not a workaround). These only
   surface via real `xcodebuild`, never via a bare `swiftc -typecheck`.
-- **Not literally Secure Enclave-resident.** The phone's private key is Ed25519,
-  generated in software and stored in the Keychain with a biometry access-control flag —
-  encrypted at rest, inaccessible without Face ID/passcode, but not living inside the
-  secure co-processor the way a true Secure Enclave key does. Apple's Secure Enclave only
-  supports hardware-resident generation for P-256 keys, and the backend verifies Ed25519.
-  See the comment at the top of `KeyManager.swift` for what switching to true Secure
-  Enclave residency would require (a backend change to verify P-256/ECDSA instead).
+- **Now Secure-Enclave-resident (P-256), but not yet confirmed on real hardware.** The
+  phone's private key used to be Ed25519, generated in software and stored in the
+  Keychain — encrypted at rest, but not living inside the secure co-processor. It's now
+  `SecureEnclave.P256.Signing.PrivateKey`, real hardware key material that never leaves
+  the Secure Enclave. The backend accepts both: P-256 for new registrations, Ed25519 for
+  already-registered phones (`backend/auth/phone-auth.js`). **What's actually verified:**
+  the app compiles clean (`xcodebuild`, simulator target) and the backend's P-256 verify
+  path is proven correct via real Node-generated P-256 keys/signatures
+  (`backend/test/phone-p256.test.js`, 5 passing tests). **What's NOT yet verified:** a
+  real CryptoKit-generated `SecureEnclave.P256` signature has not been run against the
+  live backend on a physical iPhone — both implementations follow the same RFC 5480 SPKI
+  / DER-ECDSA-SHA256 encoding, which is why this should interoperate, but "should" isn't
+  "confirmed" until it's actually run once on real hardware. Do that before trusting this
+  for anything beyond dev/test. The Secure Enclave is also unavailable on the Simulator
+  (`SecureEnclave.isAvailable == false`) — `createIdentity()` throws
+  `.secureEnclaveUnavailable` there by design, so this must be tested on a real device.
 - **No real IMEI, no Apple App Attest, no Google Play Integrity.** iOS apps can't read
   the device's real IMEI; that field is a placeholder string for shape-compatibility
   with the backend's `phoneAttestation` structure. This doesn't call Apple's actual App
   Attest API — that's a materially larger integration (DeviceCheck entitlement, Apple's
-  attestation servers). Identity here is proven via Keychain + Face ID + a real Ed25519
-  signature instead — genuine cryptographic proof-of-possession, just not Apple's
+  attestation servers). Identity here is proven via the Secure Enclave + Face ID + a real
+  P-256 signature instead — genuine cryptographic proof-of-possession, just not Apple's
   specific attestation service.
 
 ## Running on a real device

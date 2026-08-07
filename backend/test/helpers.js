@@ -9,16 +9,33 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_PATH = path.join(__dirname, '..', 'server.js');
 
 // Ed25519 SubjectPublicKeyInfo DER has no algorithm parameters, so this 12-byte prefix is
-// fixed and identical for every Ed25519 key — same constant the app/firmware/backend all
+// fixed and identical for every Ed25519 key — same constant the firmware/backend both
 // independently derive from Node's own `publicKey.export({type:'spki',format:'der'})`.
+// Used for BOARD/DEVICE identities everywhere (device-auth.js is Ed25519-only, unchanged
+// by the phone-side Secure Enclave migration) and for legacy-phone backward-compat tests.
 export function keypair() {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const publicKeyB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
   return { publicKey, privateKey, publicKeyB64 };
 }
 
+// P-256, matching what iOS's KeyManager.swift now generates via
+// SecureEnclave.P256.Signing.PrivateKey — this is what a real phone registers today.
+// Node's own SPKI DER export needs no hand-rolled prefix (unlike Ed25519 above): EC SPKI
+// carries its curve OID in the DER itself, and CryptoKit's P256.Signing.PublicKey produces
+// the exact same RFC 5480 encoding independently.
+export function p256Keypair() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const publicKeyB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+  return { publicKey, privateKey, publicKeyB64 };
+}
+
+// Dispatches on the private key's own type, so existing Ed25519 callers (the whole
+// existing test suite — device keys, and legacy-phone tests) are unaffected; a P-256
+// key from p256Keypair() above signs with the same call.
 export function sign(privateKey, message) {
-  return crypto.sign(null, Buffer.from(message, 'utf8'), privateKey).toString('base64');
+  const algorithm = privateKey.asymmetricKeyType === 'ec' ? 'sha256' : null;
+  return crypto.sign(algorithm, Buffer.from(message, 'utf8'), privateKey).toString('base64');
 }
 
 /**

@@ -3,24 +3,28 @@ import CryptoKit
 import LocalAuthentication
 import Security
 
-/// Manages this phone's Ed25519 identity: a keypair generated once on first launch,
-/// persisted in the Keychain, and gated behind Face ID / Touch ID for every use.
+/// Manages this phone's P-256 identity: a keypair generated once on first launch,
+/// resident in the Secure Enclave, and gated behind Face ID / Touch ID for every use.
 ///
-/// NOTE ON SECURE ENCLAVE: Apple's Secure Enclave only supports hardware-resident key
-/// generation for P-256 (`SecureEnclave.P256.Signing.PrivateKey`), not Ed25519/Curve25519.
-/// The PhysicalKey backend verifies Ed25519 signatures (see backend/auth/phone-auth.js),
-/// which was proven to interop correctly with Swift's CryptoKit in
-/// mobile/ios-crypto-poc — but that means this key is generated in software and stored in
-/// the Keychain with a biometry-gated access control, not literally inside the secure
-/// co-processor. It's still encrypted at rest and inaccessible without Face ID / device
-/// passcode, but it is a materially weaker guarantee than true Secure Enclave residency.
-/// If that distinction matters for this product, the real fix is switching the backend to
-/// verify P-256/ECDSA signatures instead of Ed25519 so this can use
-/// `SecureEnclave.P256.Signing.PrivateKey` — that's a backend change, not just an app one.
+/// This used to be a software Ed25519 key (Keychain-encrypted, biometry-gated, but not
+/// literally inside the secure co-processor) because Apple's Secure Enclave only supports
+/// hardware-resident key generation for P-256, not Ed25519/Curve25519 — see git history
+/// for that version. The backend now verifies P-256/ECDSA-SHA256 signatures for phone
+/// identities (`backend/auth/phone-auth.js`, dual-algorithm: still accepts already-
+/// registered Ed25519 phones too), so this can use `SecureEnclave.P256.Signing.PrivateKey`
+/// for a real hardware-residency guarantee instead of the weaker software-key one.
+///
+/// `dataRepresentation` (stored in the Keychain below) is an opaque, SE-wrapped reference,
+/// not raw key material — Apple's own guidance is that it doesn't need its own Keychain
+/// access control on top, since the actual gate is the access control baked into the SE
+/// key itself at creation time, enforced by the Secure Enclave when `signature(for:)` is
+/// called. Adding a second Keychain-level biometric gate on top would double-prompt Face
+/// ID for no real security gain.
 enum KeyManagerError: Error, LocalizedError {
     case keychainWrite(OSStatus)
     case keychainRead(OSStatus)
     case biometricsUnavailable(Error)
+    case secureEnclaveUnavailable
 
     /// Maps the handful of OSStatus codes actually reachable from this file's Keychain
     /// calls to plain-language explanations. `errSecNotAvailable` on write is specifically
@@ -46,14 +50,16 @@ enum KeyManagerError: Error, LocalizedError {
             }
         case .biometricsUnavailable:
             return "Face ID / Touch ID isn't available on this device. Set it up in Settings, then try again."
+        case .secureEnclaveUnavailable:
+            return "This device has no Secure Enclave (e.g. the iOS Simulator) — PhysicalKey's identity key requires real hardware."
         }
     }
 }
 
 // @unchecked Sendable: every stored property below is a `let` constant (no mutable
 // instance state), and all methods either operate on function-local variables or talk to
-// the Keychain/LAContext APIs, which are safe for concurrent access on their own — this
-// class has nothing that actually needs actor isolation to share safely.
+// the Keychain/LAContext/SecureEnclave APIs, which are safe for concurrent access on their
+// own — this class has nothing that actually needs actor isolation to share safely.
 final class KeyManager: @unchecked Sendable {
     static let shared = KeyManager()
 
@@ -75,17 +81,13 @@ final class KeyManager: @unchecked Sendable {
         return fresh
     }
 
-    /// Ed25519 SubjectPublicKeyInfo DER has no algorithm parameters, so this 12-byte
-    /// prefix is fixed and identical for every Ed25519 key. Confirmed against what the
-    /// backend's own scripts/keygen.js produces (Node's `publicKey.export({type: 'spki',
-    /// format: 'der'})`) and verified end-to-end in mobile/ios-crypto-poc.
-    private static let ed25519SPKIPrefix: [UInt8] = [
-        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00
-    ]
-
-    private func spkiDERBase64(for publicKey: Curve25519.Signing.PublicKey) -> String {
-        let der = Data(Self.ed25519SPKIPrefix) + publicKey.rawRepresentation
-        return der.base64EncodedString()
+    /// P-256 public keys carry their own X.509 SubjectPublicKeyInfo encoder in CryptoKit
+    /// (unlike Curve25519, which only exposes raw bytes) — no hand-rolled prefix constant
+    /// needed here. Confirmed to match what the backend's `crypto.createPublicKey({type:
+    /// 'spki', format: 'der'})` expects: both follow the same RFC 5480 encoding for
+    /// id-ecPublicKey / prime256v1.
+    private func spkiDERBase64(for publicKey: P256.Signing.PublicKey) -> String {
+        publicKey.derRepresentation.base64EncodedString()
     }
 
     /// True if a key has already been generated (i.e. this isn't first launch). Checking
@@ -103,8 +105,9 @@ final class KeyManager: @unchecked Sendable {
     /// registered for this deviceId, which is rejected as a hijack attempt by design.
     @discardableResult
     func createIdentity() throws -> String {
-        let privateKey = Curve25519.Signing.PrivateKey()
-        let publicKeyB64 = spkiDERBase64(for: privateKey.publicKey)
+        guard SecureEnclave.isAvailable else {
+            throw KeyManagerError.secureEnclaveUnavailable
+        }
 
         guard let accessControl = SecAccessControlCreateWithFlags(
             nil,
@@ -115,9 +118,11 @@ final class KeyManager: @unchecked Sendable {
             throw KeyManagerError.keychainWrite(errSecParam)
         }
 
+        let privateKey = try SecureEnclave.P256.Signing.PrivateKey(accessControl: accessControl)
+        let publicKeyB64 = spkiDERBase64(for: privateKey.publicKey)
+
         var query = baseQuery()
-        query[kSecValueData as String] = privateKey.rawRepresentation
-        query[kSecAttrAccessControl as String] = accessControl
+        query[kSecValueData as String] = privateKey.dataRepresentation
 
         SecItemDelete(baseQuery() as CFDictionary) // clear any previous identity first
         let status = SecItemAdd(query as CFDictionary, nil)
@@ -128,15 +133,13 @@ final class KeyManager: @unchecked Sendable {
         return publicKeyB64
     }
 
-    /// Prompts Face ID / Touch ID, then signs `message` with the stored private key.
+    /// Signs `message` with the stored Secure Enclave private key. The Secure Enclave
+    /// itself prompts Face ID / Touch ID here (per the access control baked in at
+    /// `createIdentity()` time) — no separate Keychain-level biometric read happens first.
     /// Throws if the user cancels, biometrics fail, or no identity has been created yet.
     func sign(_ message: String) async throws -> String {
-        let context = LAContext()
-        context.localizedReason = "Authenticate to PhysicalKey"
-
         var query = baseQuery()
         query[kSecReturnData as String] = true
-        query[kSecUseAuthenticationContext as String] = context
 
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -144,22 +147,26 @@ final class KeyManager: @unchecked Sendable {
             throw KeyManagerError.keychainRead(status)
         }
 
-        let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: keyData)
+        let context = LAContext()
+        context.localizedReason = "Authenticate to PhysicalKey"
+        let privateKey = try SecureEnclave.P256.Signing.PrivateKey(
+            dataRepresentation: keyData,
+            authenticationContext: context
+        )
         let signature = try privateKey.signature(for: Data(message.utf8))
-        return signature.base64EncodedString()
+        // DER is Node's `crypto.sign`/`crypto.verify` default encoding for EC signatures
+        // (the `dsaEncoding` option defaults to `'der'`), so sending derRepresentation
+        // here needs no format negotiation on the backend side.
+        return signature.derRepresentation.base64EncodedString()
     }
 
-    /// Public key for the currently stored identity, if any — does not require biometrics
-    /// (public keys aren't secret), but Keychain metadata reads for a key with a biometry
-    /// ACL are also restricted, so this still reconstructs from a biometric-gated read
-    /// the first time within a session. In practice, cache this after `createIdentity()`.
+    /// Public key for the currently stored identity, if any. Reconstructing the
+    /// SecureEnclave key from its stored dataRepresentation just to read the public half
+    /// doesn't require biometrics — CryptoKit doesn't gate deriving a public key, only
+    /// signing with the private one.
     func currentPublicKeyB64() async throws -> String {
-        let context = LAContext()
-        context.localizedReason = "Authenticate to PhysicalKey"
-
         var query = baseQuery()
         query[kSecReturnData as String] = true
-        query[kSecUseAuthenticationContext as String] = context
 
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -167,7 +174,7 @@ final class KeyManager: @unchecked Sendable {
             throw KeyManagerError.keychainRead(status)
         }
 
-        let privateKey = try Curve25519.Signing.PrivateKey(rawRepresentation: keyData)
+        let privateKey = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: keyData)
         return spkiDERBase64(for: privateKey.publicKey)
     }
 
