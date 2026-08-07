@@ -1,5 +1,129 @@
 # PhysicalKey Local Backend Setup — Results
 
+## IN PROGRESS: payments, backend resilience, BLE MITM passkey, Secure Enclave P-256 migration — hardware pairing test BLOCKED (2026-08-07)
+
+Session scope: four gaps flagged by a "where does PhysicalKey stand" assessment — no
+payment path, single-point-of-failure backend, no BLE MITM protection, phone identity not
+Secure-Enclave-resident. Physical hardware bonding test explicitly deferred to last, then
+attempted; currently blocked on an unexplained Secure Enclave error. Payments deliberately
+NOT activated live (Stripe account/keys not created yet — by request).
+
+### Done and verified
+
+- **Payments**: `POST /billing/checkout` (Stripe Checkout Session) + `POST /billing/webhook`
+  (signature-verified via Stripe's own `generateTestHeaderString` test utility — no live
+  account needed to prove it works) + `GET/POST /admin/backups`-style `/admin/subscriptions`
+  view. New `payments/subscriptions.js` (pure DB logic) + `payments/stripe.js` (thin Stripe
+  glue). Landing page's Team card now POSTs to `/billing/checkout` instead of just
+  scrolling to the email waitlist — **but `API_BASE` in `index.html` is still a literal
+  placeholder** (`https://REPLACE-WITH-YOUR-BACKEND-URL`) since the real Railway/API domain
+  wasn't known; the backend itself also 503s until `STRIPE_SECRET_KEY` /
+  `STRIPE_PRICE_ID_TEAM` / `STRIPE_WEBHOOK_SECRET` are set. 5 new tests
+  (`test/billing.test.js`, `test/subscriptions.test.js`).
+- **Backend resilience** (pragmatic hardening, not full HA — deliberate scope choice):
+  `/health` now actually queries the DB; scheduled + on-demand snapshots via SQLite
+  `VACUUM INTO` (`lib/backup.js`, `scripts/backup.js`/`restore.js`); `GET/POST
+  /admin/backups`, `GET /admin/backups/latest`; `docker-compose.yml` +
+  `backend/SELF_HOSTING.md` for a real self-host path; fixed a previously-broken README
+  instruction (`.env.example` was referenced but never committed — now exists). 12 new
+  tests (`test/resilience.test.js`, `test/backup.test.js`). Full suite: 117/117 passing.
+  **Honest limit, stated in SELF_HOSTING.md itself**: still one process, one SQLite file,
+  no replica — backups shrink blast radius and recovery time, they don't add redundancy.
+- **BLE MITM passkey**: `hardware/firmware-idf/.../main/pairing.cpp` (new) generates a
+  random 6-digit passkey once on first boot, NVS-persisted, logged loudly to console.
+  `main.cpp` switched `sm_io_cap` from `BLE_SM_IO_CAP_NO_IO`/`sm_mitm=0` (Just Works) to
+  `BLE_SM_IO_CAP_DISP_ONLY`/`sm_mitm=1` (Passkey Entry) + a `BLE_GAP_EVENT_PASSKEY_ACTION`
+  handler. No iOS changes needed — CoreBluetooth hands passkey UI to iOS's own system
+  pairing prompt. Compiles clean via real `idf.py build`. Already-bonded boards (`...03c9c`,
+  `...00800`) are unaffected — their existing bonds skip pairing entirely; this only fires
+  on a board's next genuine first pairing.
+- **Secure Enclave P-256 migration for the PHONE identity only** (device/board identity
+  stays Ed25519 — ESP32 has no Secure Enclave equivalent to gain from switching).
+  `KeyManager.swift` rewritten: `Curve25519.Signing.PrivateKey` (software, Keychain-only) →
+  `SecureEnclave.P256.Signing.PrivateKey` (real hardware residency). Backend
+  `auth/phone-auth.js` now dual-algorithm (`asymmetricKeyType === 'ed25519' | 'ec'`) so
+  already-registered legacy Ed25519 phones keep working — no forced re-pairing.
+  `AuthViewModel.swift`/`PhysicalKeyAPI.swift` needed ZERO changes (clean encapsulation).
+  Verified: real Xcode build succeeds (simulator target), 5 new backend tests prove genuine
+  Node-generated P-256 key/signature round-trips through the real verify path
+  (`test/phone-p256.test.js`). **NOT verified: real CryptoKit-generated signature against
+  the live backend from an actual device** — see blocker below, this is exactly what we hit
+  trying to confirm.
+
+### Mistake made and recovered: `idf.py flash` vs `idf.py encrypted-flash`
+
+Despite this exact gotcha already being documented above (2026-08-06 entry, line ~18) and
+in `hardware/README.md`, ran plain `idf.py -p /dev/cu.usbserial-0001 flash` against board
+`...0684c` (which has flash+NVS encryption enabled, confirmed in its own pre-flash boot
+log) instead of `encrypted-flash`. Result: real boot-loop (`RTCWDT_RTC_RESET`, repeating
+`invalid header: 0x748e364f`), confirmed with the exact same reset method (`esptool
+read_mac`) that had worked cleanly seconds earlier — not a reset-script artifact.
+**Recovered cleanly** via `idf.py -p /dev/cu.usbserial-0001 encrypted-flash` — board
+`...0684c`'s identity survived unchanged, new firmware boots, printed
+`NEW PAIRING PASSKEY: 969735` on first boot as designed. Saved to assistant memory
+(`feedback-verify-dont-fabricate`) so this isn't repeated a third time — check for
+"encrypted-flash" in this doc / `hardware/README.md` BEFORE the first flash of any session
+touching real hardware.
+
+### Board `...0684c` — corrected history
+
+An earlier same-session assessment ("Where We Stand") concluded this board was "never
+flashed," based only on this doc's own narrative coverage (which only narrates the first
+two boards in detail). **Wrong** — Humberto had a physical label with this board's real
+MAC-derived ID on it already, which is only possible if it had been flashed and booted
+before. Confirmed directly: `esptool read_mac` → `68:09:47:e0:68:4c`, matching the label
+exactly; a passive (non-flashing) boot-log read showed `identity: Loaded existing identity
+from flash.` — i.e. it already had a persisted Ed25519 identity from a prior flash, just
+never bonded to a phone (confirmed by Humberto). Current real state as of tonight: identity
+`physicalkey-device-680947e0684c`, running the new passkey firmware, passkey `969735`
+(needs writing on the physical unit alongside the existing deviceId label), still never
+bonded to any phone — genuinely available for a clean first-pairing test.
+
+### BLOCKED: Secure Enclave key creation fails on real device
+
+Built + installed the updated app (real device build, real code-signing, `xcodebuild` +
+`devicectl install` + `devicectl launch`, all succeeded per tool output — though note this
+project's standing caution that `devicectl`'s own success reporting has been unreliable
+before) onto the **iPhone 16 Pro Max** (`devicectl` id
+`1FBAA9F4-0F90-50E4-9894-8D37F380D4FA`, serial `L7XP0Q69X0`). Tapped "Create Identity."
+Got: **`Error Domain=com.apple.CryptoTokenKit Code=3 "Corrupted object ID detected"`** —
+a raw system error from `SecureEnclave.P256.Signing.PrivateKey(accessControl:)` itself
+(not one of `KeyManagerError`'s custom cases, so it's surfacing unhandled/generic in the
+UI). Root cause NOT yet identified. Relevant context for next session:
+
+- This is the SAME phone the 2026-08-06 entry above says was paired with the **hardened
+  board** (`...03c9c`) under the OLD Ed25519 `KeyManager` — so it almost certainly has a
+  real pre-migration Ed25519 Keychain entry under `com.physicalkey.identity.privatekey`
+  already. `createIdentity()`'s `SecItemDelete` before `SecItemAdd` should handle deleting
+  that regardless of its format — but this wasn't confirmed to actually be the trigger.
+- Open questions asked and NOT yet answered when the session paused: the *complete*
+  unabridged error text (this may be a truncated/paraphrased version), whether it appeared
+  immediately on tapping "Create Identity" or after a Face ID prompt, and whether this
+  device has Face ID actually enrolled + a passcode set (the access control used —
+  `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` + `.biometryCurrentSet` — needs both).
+- Not yet tried: the OTHER phone (**"Achilles iphone"**, `devicectl` id
+  `AC6C3C43-1F60-5FB8-A8AE-9F9005326F58`, serial `F170L7HWT4`) — would help isolate whether
+  this is phone-specific (stale SE/Keychain state on the 16 Pro Max specifically) or a real
+  bug in the `SecureEnclave.P256` code itself.
+- Not yet tried: deleting the app and letting Humberto manually wipe the old Keychain entry
+  via Settings, or a debug "reset identity" path that doesn't go through the app's normal
+  flow at all.
+
+**Next session should start here** — this is the one open item standing between "P-256
+migration compiles and passes backend tests" and "P-256 migration is actually proven on
+real hardware."
+
+### Task status at pause point
+
+| # | Task | Status |
+|---|------|--------|
+| 1 | Payment path (Stripe) | Done, not activated live |
+| 2 | Backend single point of failure | Done (pragmatic hardening) |
+| 3 | BLE MITM passkey | Done, compile-verified, NOT yet hardware-verified (blocked above) |
+| 4 | Flash 3rd board + two-phone bonding test | Blocked on the CryptoTokenKit error above |
+| 5 | iOS Secure Enclave gap | Code done, backend-verified, NOT yet hardware-verified |
+| 6 | Automated test coverage for firmware/iOS | Not started |
+
 ## RESOLVED: Anti-Clone plan Phase 4 — ratchet confirmed on the hardened prototype board (2026-08-06)
 
 The gap flagged earlier today (every real ratchet verification on record only ever ran

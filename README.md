@@ -13,7 +13,7 @@ PhysicalKey is a hardware authentication system that combines:
 
 - **Phone biometric** (Face ID, fingerprint)
 - **Hardware device** (ESP32 with cryptographic signing)
-- **Backend verification** (Ed25519 challenge-response)
+- **Backend verification** (P-256 phone identity, Ed25519 device identity — challenge-response)
 
 The result is designed to resist cloning, theft, and forgery for:
 
@@ -26,9 +26,10 @@ The result is designed to resist cloning, theft, and forgery for:
 ## Current Scope
 
 PhysicalKey currently combines phone biometric approval, an ESP32 hardware device,
-Ed25519 challenge-response, backend verification, organization controls, and audit
-records. Device-side biometrics and door-lock integrations are roadmap items, not
-features in the current beta.
+challenge-response backend verification (P-256 for the phone identity, Secure-Enclave-
+resident; Ed25519 for the device identity), organization controls, and audit records.
+Device-side biometrics and door-lock integrations are roadmap items, not features in the
+current beta.
 
 ## How It Works
 
@@ -51,7 +52,12 @@ Threat model highlights:
 - Stolen device: no Face ID, so the phone remains locked
 - Cloned device: signature verification fails
 - Passive BLE interception: LE Secure Connections encrypts transport
-- Active BLE man-in-the-middle attacks: the current Just Works pairing mode does not provide authenticated MITM protection
+- Active BLE man-in-the-middle attacks at first pairing: closed via Passkey Entry pairing
+  (a per-unit passkey generated once on first boot, written on the physical
+  enclosure/label at provisioning time — see `hardware/firmware-idf/.../main/pairing.cpp`).
+  Boards paired before this change keep working via their existing bond without
+  re-pairing; this only applies to a board's *next* first pairing (a fresh board, or one
+  that's been explicitly un-paired)
 - Compromised backend: identities can be revoked and the audit log records activity
 
 ## Architecture
@@ -69,6 +75,12 @@ Threat model highlights:
   unresettable (no admin override exists in the code path); `self-service` identities
   can be re-paired via a board-signed proof of physical possession, with no admin
   involved
+- Scheduled + on-demand database snapshots (`/admin/backups`), health check that verifies
+  database connectivity rather than just process liveness, and a documented self-host
+  path ([SELF_HOSTING.md](./backend/SELF_HOSTING.md)) — **note the honest limit**: this is
+  still a single process against a single SQLite file with no replica or failover, whether
+  PK-hosted or self-hosted. Backups shrink blast radius and recovery time; they don't add
+  redundancy. See SELF_HOSTING.md for what real HA would require.
 
 ### Hardware (ESP32-DevKitC-32D, ESP-IDF)
 
@@ -81,7 +93,9 @@ Threat model highlights:
 
 ### iOS App (SwiftUI, Swift 6)
 
-- Keychain-backed Ed25519 identity with `.biometryCurrentSet`
+- Secure-Enclave-resident P-256 identity (`SecureEnclave.P256.Signing.PrivateKey`) —
+  hardware key material that never leaves the secure co-processor, gated by
+  `.biometryCurrentSet`
 - Face ID gating
 - BLE client for challenge exchange
 - Team and membership management
@@ -132,7 +146,10 @@ See [SETUP_COMPLETE.md](./SETUP_COMPLETE.md) for the current setup and validatio
 
 ### What's Protected
 
-- Device identity via an Ed25519 private key encrypted at rest
+- Phone identity via a Secure-Enclave-resident P-256 private key (never leaves the
+  co-processor); device identity via an Ed25519 private key encrypted at rest. A
+  previously-registered legacy Ed25519 phone identity remains valid — the migration
+  didn't force re-pairing
 - Cryptographically verified challenge-response
 - Backend-enforced organization and team isolation
 - Device binding and provenance checks
@@ -144,7 +161,6 @@ See [SETUP_COMPLETE.md](./SETUP_COMPLETE.md) for the current setup and validatio
 ### What's Not Protected Yet
 
 - [ ] HSM-backed KMS integration
-- [ ] BLE out-of-band pairing
 - [ ] Post-quantum cryptography
 - [ ] Device-side hardware tamper detection
 
@@ -187,7 +203,9 @@ See [SETUP_COMPLETE.md](./SETUP_COMPLETE.md) for the current setup and validatio
 
 ### Cryptography
 
-- Key generation and signing: Ed25519
+- Key generation and signing: P-256/ECDSA-SHA256 for the phone identity
+  (Secure-Enclave-resident; legacy Ed25519 phones still accepted), Ed25519 for the
+  device identity
 - Verification: constant-time comparison
 - Randomness: `crypto.randomBytes`
 - Transport: BLE Secure Connections (AES-128-CCM with ECDH key agreement)
