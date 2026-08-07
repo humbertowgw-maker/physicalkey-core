@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import path from 'path';
 import express from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
@@ -19,6 +20,11 @@ import {
 } from './auth/organizations.js';
 import { isEnforced as isAllowlistEnforced, addToAllowlist, removeFromAllowlist, listAllowlist } from './auth/device-allowlist.js';
 import { recordPairing, hasEverPaired, createRepairChallenge, consumeRepairChallenge, verifyBoardSignature } from './auth/repair.js';
+import db from './lib/db.js';
+import { dataDir } from './lib/data-dir.js';
+import { runBackup, pruneBackups, listBackups, backupsDir } from './lib/backup.js';
+import { isConfigured as isBillingConfigured, createCheckoutSession, handleWebhookEvent } from './payments/stripe.js';
+import { listAllSubscriptions } from './payments/subscriptions.js';
 
 dotenv.config();
 
@@ -47,13 +53,21 @@ const activeChallenges = new Map();
 app.set('trust proxy', 1);
 
 app.use(helmet());
-// No CORS middleware: every real client here is a native iOS app or ESP32 firmware,
-// neither of which is subject to (or benefits from) CORS — it's a browser-only
-// enforcement mechanism. `cors()` previously reflected every origin by default, which
-// was pure unnecessary exposure with no actual client that needed it. If a browser-based
-// admin panel or web client is ever added, reintroduce it scoped to that origin
-// specifically, not wide open.
-app.use(express.json({ limit: '10mb' }));
+// No general CORS middleware: every OTHER real client here is a native iOS app or ESP32
+// firmware, neither of which is subject to (or benefits from) CORS. /billing/checkout is
+// the one deliberate exception — see the scoped Access-Control-Allow-Origin set directly
+// on that route below, limited to the landing page's own origin, not wide open.
+app.use(express.json({
+  limit: '10mb',
+  // Stripe webhook signature verification needs the exact raw bytes Stripe signed —
+  // parsing and re-serializing (what express.json() does to req.body) would produce
+  // different bytes and always fail verification. Stashing the raw buffer here, only for
+  // that one route, avoids reordering this middleware relative to everything else that
+  // already depends on req.body being parsed JSON.
+  verify: (req, res, buf) => {
+    if (req.originalUrl === '/billing/webhook') req.rawBody = buf;
+  }
+}));
 // Skipped only when NODE_ENV=test — a single test file exercising a full org (create,
 // add several members, claim a device, grant/revoke access, multiple auth flows) easily
 // exceeds this within one server instance's lifetime, which has nothing to do with what
@@ -76,9 +90,19 @@ const authRateLimit = process.env.NODE_ENV === 'test'
   ? (req, res, next) => next()
   : rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
 
-// Health check
+// Health check — actually touches the database rather than just confirming the process
+// is alive. A process that's up but whose SQLite file has gone missing, corrupted, or
+// unwritable (a bad volume mount, a full disk) previously reported "online" and kept
+// getting traffic; Railway (or any platform watching this endpoint) can now restart it
+// instead of silently serving errors.
 app.get('/health', (req, res) => {
-  res.json({ status: 'online', timestamp: new Date().toISOString() });
+  try {
+    db.prepare('SELECT 1').get();
+    res.json({ status: 'online', database: 'ok', timestamp: new Date().toISOString() });
+  } catch (error) {
+    console.error('Health check: database unreachable:', error.message);
+    res.status(503).json({ status: 'degraded', database: 'error', timestamp: new Date().toISOString() });
+  }
 });
 
 // Status
@@ -94,6 +118,57 @@ app.get('/status', (req, res) => {
     },
     timestamp: new Date().toISOString()
   });
+});
+
+// Billing — the only routes in this file a browser calls directly (from the landing
+// page), rather than the iOS app or firmware. Scoped CORS, not the blanket kind.
+const LANDING_ORIGIN = process.env.LANDING_ORIGIN || 'https://physicalkey.whitegwireless.com';
+
+app.options('/billing/checkout', (req, res) => {
+  res.set('Access-Control-Allow-Origin', LANDING_ORIGIN);
+  res.set('Access-Control-Allow-Methods', 'POST');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  res.status(204).end();
+});
+
+app.post('/billing/checkout', async (req, res) => {
+  res.set('Access-Control-Allow-Origin', LANDING_ORIGIN);
+
+  if (!isBillingConfigured()) {
+    return res.status(503).json({ error: 'Billing is not configured yet' });
+  }
+
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim() : '';
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ error: 'A valid email is required' });
+  }
+
+  try {
+    const origin = req.get('origin') || LANDING_ORIGIN;
+    const session = await createCheckoutSession(email, {
+      successUrl: `${origin}/?checkout=success`,
+      cancelUrl: `${origin}/?checkout=cancelled`
+    });
+    res.json({ url: session.url });
+  } catch (error) {
+    console.error('Checkout session creation failed:', error.message);
+    res.status(500).json({ error: 'Could not start checkout' });
+  }
+});
+
+// Called by Stripe's servers directly, never a browser — no CORS needed. Relies on
+// req.rawBody, stashed by express.json()'s verify hook above specifically for this route,
+// since signature verification needs the exact bytes Stripe signed.
+app.post('/billing/webhook', (req, res) => {
+  if (!isBillingConfigured()) return res.status(503).end();
+
+  try {
+    handleWebhookEvent(req.rawBody, req.get('stripe-signature'));
+    res.status(200).json({ received: true });
+  } catch (error) {
+    console.error('Webhook verification failed:', error.message);
+    res.status(400).json({ error: 'Invalid signature' });
+  }
 });
 
 // Auth requirements
@@ -621,6 +696,36 @@ app.get('/admin/forensics', requireAdmin, (req, res) => {
   res.json(getForensicsReport());
 });
 
+// Resilience: the database lives on a single Railway volume with no replica, so these
+// exist to make disaster recovery actually possible — list what's on disk, and let an
+// admin pull the latest snapshot off the box periodically (e.g. into their own storage)
+// rather than the only copy being wherever Railway's volume happens to be.
+app.get('/admin/subscriptions', requireAdmin, (req, res) => {
+  res.json({ subscriptions: listAllSubscriptions() });
+});
+
+app.get('/admin/backups', requireAdmin, (req, res) => {
+  res.json({ backups: listBackups(dataDir) });
+});
+
+// Lets an admin force a snapshot right now (e.g. immediately before a risky manual
+// change), independent of the scheduled interval.
+app.post('/admin/backups', requireAdmin, (req, res) => {
+  try {
+    const dest = runBackup(db, dataDir);
+    logAdminAction(req.deviceId, 'backup_triggered', null, { path: dest });
+    res.status(201).json({ backup: path.basename(dest) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/admin/backups/latest', requireAdmin, (req, res) => {
+  const files = listBackups(dataDir);
+  if (!files.length) return res.status(404).json({ error: 'No backups yet' });
+  res.download(path.join(backupsDir(dataDir), files[files.length - 1]));
+});
+
 // List every currently-registered identity (phone or device), lightest shape (no public
 // key). Read-only, admin-gated. Previously the only way to check what's registered was a
 // single-deviceId lookup — no way to audit the full set without already knowing every
@@ -805,6 +910,33 @@ app.use((err, req, res, next) => {
   console.error('Error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
+
+// In-process scheduled backups: VACUUM INTO a timestamped snapshot on an interval, then
+// prune old ones. This is the pragmatic half of closing the single-point-of-failure gap —
+// it doesn't add a second instance or a replica, but it means a corrupted or accidentally
+// truncated database file isn't a total-loss event, and /admin/backups/latest gives a way
+// to pull a copy off the box without shell access. Disabled during tests: the test suite
+// spawns many short-lived server processes and doesn't need backup files accumulating in
+// each throwaway data dir.
+const BACKUP_INTERVAL_MS = Number(process.env.PK_BACKUP_INTERVAL_MS || 6 * 60 * 60 * 1000);
+const BACKUP_RETAIN = Number(process.env.PK_BACKUP_RETAIN || 14);
+let backupTimer = null;
+if (process.env.NODE_ENV !== 'test') {
+  const scheduledBackup = () => {
+    try {
+      const dest = runBackup(db, dataDir);
+      const pruned = pruneBackups(dataDir, BACKUP_RETAIN);
+      console.log(`✓ Scheduled backup written: ${dest}${pruned.length ? ` (pruned ${pruned.length} old)` : ''}`);
+    } catch (error) {
+      // A failed backup should never take the server down — log loudly and try again
+      // next interval rather than crashing a healthy server over a backup hiccup.
+      console.error('✗ Scheduled backup failed:', error.message);
+    }
+  };
+  backupTimer = setInterval(scheduledBackup, BACKUP_INTERVAL_MS);
+  backupTimer.unref();
+  scheduledBackup();
+}
 
 // Start server
 const PORT = process.env.PORT || 3000;
