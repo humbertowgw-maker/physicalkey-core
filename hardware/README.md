@@ -17,10 +17,16 @@
   - **Paired with the real iOS app** (`mobile/ios/PhysicalKey/DeviceBluetoothManager.swift`)
     — the full phone ↔ device ↔ backend flow, not just a bleak stand-in.
   - **BLE is locked down**: every characteristic requires an encrypted (paired) link —
-    LE Secure Connections, Just Works (no display/keyboard on this board). Each board
+    LE Secure Connections with Passkey Entry (this board has no display, so it can't
+    literally show a passkey — instead a per-unit passkey is generated once on first
+    boot, logged to console, and must be written on the unit's enclosure/label during
+    provisioning; NimBLE's `DISP_ONLY` io-capability + `sm_mitm=1` prompts the phone's
+    owner to type it in during pairing — see `main/pairing.cpp`). This closes the actual
+    gap Just Works had: an attacker relaying the pairing handshake can't also fake
+    knowing a number that only exists printed on the physical unit. Each board still
     permanently bonds to the first phone that pairs with it; any other peer's connection
-    gets rejected outright. Before this, any phone in range could read data and trigger
-    real signatures with zero authentication.
+    gets rejected outright. Before any of this, any phone in range could read data and
+    trigger real signatures with zero authentication.
   - **Flash encryption (Development Mode) + NVS encryption are enabled.** The Ed25519
     private key is genuinely encrypted at rest now — confirmed via the boot log's
     `NVS partition "nvs" is encrypted.` line, not just assumed from the Kconfig option

@@ -34,9 +34,11 @@
 #include "host/ble_uuid.h"
 #include "gatt_svr.h"
 #include "identity.h"
+#include "pairing.h"
 
 static const char *TAG = "physicalkey";
 static uint8_t own_addr_type;
+static uint32_t s_pairing_passkey;
 
 static void start_advertising(void);
 
@@ -102,6 +104,27 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg) {
         case BLE_GAP_EVENT_ENC_CHANGE:
             ESP_LOGI(TAG, "encryption change event; status=%d", event->enc_change.status);
             return 0;
+
+        case BLE_GAP_EVENT_PASSKEY_ACTION: {
+            // NimBLE asking us (the DISP_ONLY side) what to "display." We have no screen,
+            // so there's nothing to render here — the value is the passkey generated once
+            // on first boot and written on this unit's enclosure (see pairing.cpp). The
+            // phone's OS shows its own system pairing prompt asking the human to type it
+            // in; this device just needs to report the correct value to NimBLE.
+            if (event->passkey.params.action == BLE_SM_IOACT_DISP) {
+                struct ble_sm_io pkey = {};
+                pkey.action = BLE_SM_IOACT_DISP;
+                pkey.passkey = s_pairing_passkey;
+                int rc = ble_sm_inject_io(event->passkey.conn_handle, &pkey);
+                if (rc != 0) {
+                    ESP_LOGE(TAG, "ble_sm_inject_io failed; rc=%d", rc);
+                }
+            } else {
+                ESP_LOGW(TAG, "Unexpected passkey action %d — this device only supports Display-Only pairing.",
+                         event->passkey.params.action);
+            }
+            return 0;
+        }
 
         case BLE_GAP_EVENT_REPEAT_PAIRING: {
             // The already-bonded phone is pairing again (e.g. it lost its own copy of the
@@ -206,6 +229,7 @@ extern "C" void app_main(void) {
     ESP_ERROR_CHECK(ret);
 
     loadOrCreateIdentity();
+    s_pairing_passkey = loadOrCreatePairingPasskey();
 
     ret = nimble_port_init();
     if (ret != ESP_OK) {
@@ -224,16 +248,20 @@ extern "C" void app_main(void) {
     ble_hs_cfg.store_write_cb = ble_store_config_write;
     ble_hs_cfg.store_delete_cb = ble_store_config_delete;
 
-    // No display or keyboard on this board, so Just Works is the only pairing method
-    // available — it protects against passive eavesdropping and silent drive-by GATT
-    // access (the actual gap being closed here), but not against an active
-    // machine-in-the-middle at pairing time itself. sm_sc (LE Secure Connections) is what
-    // makes that pairing cryptographically strong rather than the old, weaker legacy
-    // method; combined with is_already_bonded_to_someone_else() above, a board can only
-    // ever be claimed by one phone, once.
-    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
+    // No display or keyboard on this board, so it can't literally show a passkey — but
+    // DISP_ONLY + sm_mitm=1 tells NimBLE to run Passkey Entry rather than Just Works: the
+    // phone's OS prompts its owner to type in a number, and this device supplies that
+    // number via the BLE_GAP_EVENT_PASSKEY_ACTION handler below (a value unique to this
+    // physical unit, generated once and written on its enclosure — see pairing.cpp). That
+    // closes the actual gap Just Works had: an attacker relaying the pairing handshake
+    // can't also fake knowing a number that only exists printed on the object in your
+    // hand. sm_sc (LE Secure Connections) is what makes the resulting pairing
+    // cryptographically strong rather than the old, weaker legacy method; combined with
+    // is_already_bonded_to_someone_else() above, a board can still only ever be claimed
+    // by one phone, once.
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_DISP_ONLY;
     ble_hs_cfg.sm_bonding = 1;
-    ble_hs_cfg.sm_mitm = 0;
+    ble_hs_cfg.sm_mitm = 1;
     ble_hs_cfg.sm_sc = 1;
     ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
