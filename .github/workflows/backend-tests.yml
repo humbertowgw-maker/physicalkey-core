@@ -18,7 +18,7 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Matches the Dockerfile's node:26-alpine — the actual version this runs on in
       # production, not just the package.json "engines" floor.
@@ -39,7 +39,7 @@ jobs:
   docker-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - run: docker build -t physicalkey-backend-ci ./backend
 
