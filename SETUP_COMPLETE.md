@@ -1,5 +1,70 @@
 # PhysicalKey Local Backend Setup — Results
 
+## RESOLVED: Secure Enclave signing was broken in CryptoKit itself, not the app — fixed by switching to raw Security-framework SecKey APIs (2026-08-08/09)
+
+Picked up exactly where the 2026-08-07 session paused (see the "IN PROGRESS" section
+directly below for full original context). Two distinct, real bugs were found and fixed
+in sequence on the iPhone 16 Pro Max (devicectl id `1FBAA9F4-0F90-50E4-9894-8D37F380D4FA`)
+— confirmed by live console-log capture (`xcrun devicectl device process launch
+--console`) during real taps on the device, not guessed from error text alone:
+
+**Bug 1 — stale pre-migration Ed25519 key masquerading as a valid identity.** The
+`CryptoTokenKit Code=3 "Corrupted object ID detected"` error from the prior session was
+this phone's *old* software-Ed25519 key (32 raw bytes) still sitting in the same Keychain
+slot (`kSecClassGenericPassword`, account `com.physicalkey.identity.privatekey`) the new
+P-256 code reads from. `hasIdentity` only checked *existence*, so the UI skipped "Create
+Identity" and went straight to "Authenticate," which fed the 32 legacy bytes into
+`SecureEnclave.P256.Signing.PrivateKey(dataRepresentation:)` — confirmed via a live log
+line showing `read 32 bytes from Keychain` right before the throw. Fixed by making
+`hasIdentity` actually validate the stored data reconstructs as a real P-256 key,
+self-healing (deletes the stale item) when it doesn't.
+
+**Bug 2 — CryptoKit's `SecureEnclave.P256.Signing.PrivateKey` is broken for signing on
+this device/iOS version.** After bug 1's fix, a *freshly generated* P-256 key (created
+fresh in the same session, `.privateKeyUsage` + `.biometryCurrentSet` both set correctly)
+still failed every single `signature(for:)` call with `Error Domain=com.apple.
+LocalAuthentication Code=-1009 "ACL operation is not allowed: 'osgn'"` — reproduced
+identically across a full uninstall/reinstall/fresh-key cycle, with Face ID confirmed
+enrolled and available (`canEvaluatePolicy` true) and even after an explicit successful
+`LAContext.evaluateAccessControl(.useKeySign)` immediately beforehand. The conclusive test:
+a side-by-side diagnostic in the same app session generated a key and signed with it using
+the **raw Security framework** (`SecKeyCreateRandomKey` + `SecKeyCreateSignature`,
+identical access-control flags, same device, same moment) — and it **succeeded** every
+time, producing a valid 72-byte DER signature, while CryptoKit's wrapper kept failing on
+the exact same operation. This isolates the bug to CryptoKit's `SecureEnclave.P256.
+Signing.PrivateKey` specifically on iOS 26.5, not the device, the ACL configuration, Face
+ID enrollment, or anything else in the app.
+
+**The fix**: `KeyManager.swift` was rewritten to drop CryptoKit's `SecureEnclave.P256.
+Signing.PrivateKey` entirely and use the raw Security framework directly —
+`SecKeyCreateRandomKey` (with `kSecAttrTokenID: kSecAttrTokenIDSecureEnclave`) for
+generation/storage as a native `kSecClassKey` Keychain item, `SecKeyCreateSignature` (with
+`.ecdsaSignatureMessageX962SHA256`) for signing. Same P-256/Secure-Enclave hardware
+guarantee, same DER signature format the backend already expects — no backend changes
+needed for signatures. One format difference handled: `SecKeyCopyExternalRepresentation`
+returns the raw 65-byte X9.62 EC point, not SPKI DER the way CryptoKit's
+`derRepresentation` did, so the public-key export manually prepends the fixed, well-known
+26-byte RFC 5480 SPKI header for P-256/prime256v1 before base64-encoding — verified this
+matches what the backend's `crypto.createPublicKey({type:'spki', format:'der'})` expects.
+
+**Verified working, live, on the real device**: after the rewrite, tapping through
+Create Identity → Authenticate with Face ID succeeded end-to-end with no scaffolding from
+the debugging session (the user manually re-launched the app themselves after re-trusting
+the dev cert, independent of any console session Claude Code had open) — first genuine
+confirmation the P-256 migration actually works on hardware, not just compiles.
+
+**Not yet confirmed / where to pick up next**: the user connected to board `...0684c`
+(passkey `969735`) right after this fix landed, to continue the two-phone bonding test,
+but the session was paused before confirming the *full* flow (BLE pairing with the
+passkey prompt, ratchet check, backend device-verify, reaching the `.authenticated` state)
+completed successfully — only phone-side P-256 signing was directly confirmed working.
+**The fixed `KeyManager.swift` is uncommitted** (`git status` in `~/physicalkey-core`
+shows it modified, not staged) — deliberately left that way since Humberto didn't ask for
+a commit; next session should either commit it (after confirming the full flow works) or
+ask first. The second phone ("Achilles iphone", devicectl id
+`AC6C3C43-1F60-5FB8-A8AE-9F9005326F58`) pairing to a different board — the actual
+"two-phone" half of the original ask — hasn't been attempted at all yet.
+
 ## IN PROGRESS: payments, backend resilience, BLE MITM passkey, Secure Enclave P-256 migration — hardware pairing test BLOCKED (2026-08-07)
 
 Session scope: four gaps flagged by a "where does PhysicalKey stand" assessment — no
@@ -119,9 +184,9 @@ real hardware."
 |---|------|--------|
 | 1 | Payment path (Stripe) | Done, not activated live |
 | 2 | Backend single point of failure | Done (pragmatic hardening) |
-| 3 | BLE MITM passkey | Done, compile-verified, NOT yet hardware-verified (blocked above) |
-| 4 | Flash 3rd board + two-phone bonding test | Blocked on the CryptoTokenKit error above |
-| 5 | iOS Secure Enclave gap | Code done, backend-verified, NOT yet hardware-verified |
+| 3 | BLE MITM passkey | Done, compile-verified; board `...0684c` connected 2026-08-08/09, full flow (passkey/ratchet/backend-verify) not yet confirmed — see resolution section above |
+| 4 | Flash 3rd board + two-phone bonding test | Unblocked — SE bug fixed (see above). One phone connected to `...0684c`, full flow unconfirmed; second phone not attempted |
+| 5 | iOS Secure Enclave gap | Fixed 2026-08-08/09 — see resolution section above. `KeyManager.swift` rewritten (raw SecKey APIs), verified signing works live on real device. Uncommitted. |
 | 6 | Automated test coverage for firmware/iOS | Not started |
 
 ## RESOLVED: Anti-Clone plan Phase 4 — ratchet confirmed on the hardened prototype board (2026-08-06)

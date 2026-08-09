@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 import LocalAuthentication
 import Security
 
@@ -9,32 +8,29 @@ import Security
 /// This used to be a software Ed25519 key (Keychain-encrypted, biometry-gated, but not
 /// literally inside the secure co-processor) because Apple's Secure Enclave only supports
 /// hardware-resident key generation for P-256, not Ed25519/Curve25519 — see git history
-/// for that version. The backend now verifies P-256/ECDSA-SHA256 signatures for phone
+/// for that version. The backend verifies P-256/ECDSA-SHA256 signatures for phone
 /// identities (`backend/auth/phone-auth.js`, dual-algorithm: still accepts already-
-/// registered Ed25519 phones too), so this can use `SecureEnclave.P256.Signing.PrivateKey`
-/// for a real hardware-residency guarantee instead of the weaker software-key one.
+/// registered Ed25519 phones too).
 ///
-/// `dataRepresentation` (stored in the Keychain below) is an opaque, SE-wrapped reference,
-/// not raw key material — Apple's own guidance is that it doesn't need its own Keychain
-/// access control on top, since the actual gate is the access control baked into the SE
-/// key itself at creation time, enforced by the Secure Enclave when `signature(for:)` is
-/// called. Adding a second Keychain-level biometric gate on top would double-prompt Face
-/// ID for no real security gain.
+/// This deliberately uses the raw Security framework (`SecKeyCreateRandomKey` /
+/// `SecKeyCreateSignature`) instead of CryptoKit's `SecureEnclave.P256.Signing.PrivateKey`.
+/// That wrapper was tried first and confirmed broken on a real device (iPhone 16 Pro Max,
+/// iOS 26.5): key creation succeeded, but every `signature(for:)` call — with a correctly
+/// generated key, `.privateKeyUsage` + `.biometryCurrentSet` both set, Face ID enrolled and
+/// confirmed available (`canEvaluatePolicy` true), and even after an explicit successful
+/// `LAContext.evaluateAccessControl(.useKeySign)` — failed identically every time with
+/// `Error Domain=com.apple.LocalAuthentication Code=-1009 "ACL operation is not allowed:
+/// 'osgn'"`. A controlled side-by-side test in the same session, on the same device, with
+/// the identical access-control flags, showed the raw `SecKeyCreateRandomKey` +
+/// `SecKeyCreateSignature` path signing successfully every time — isolating the bug to
+/// CryptoKit's wrapper specifically, not the device, the ACL configuration, or Face ID.
 enum KeyManagerError: Error, LocalizedError {
     case keychainWrite(OSStatus)
     case keychainRead(OSStatus)
-    case biometricsUnavailable(Error)
+    case keyGeneration(Error)
+    case signing(Error)
     case secureEnclaveUnavailable
 
-    /// Maps the handful of OSStatus codes actually reachable from this file's Keychain
-    /// calls to plain-language explanations. `errSecNotAvailable` on write is specifically
-    /// what this app's `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` +
-    /// `.biometryCurrentSet` access control returns when the device has no passcode set —
-    /// confirmed against a real device in this state, not a guess (an earlier version of
-    /// this mapping assumed `errSecParam` for this case, which was wrong). `errSecParam` is
-    /// kept mapped to the same message since some iOS versions reportedly return that
-    /// instead — better to over-match than fall through to a raw code for the single most
-    /// common first-run failure.
     var errorDescription: String? {
         switch self {
         case .keychainWrite(let status), .keychainRead(let status):
@@ -48,8 +44,10 @@ enum KeyManagerError: Error, LocalizedError {
             default:
                 return "Keychain error (code \(status))."
             }
-        case .biometricsUnavailable:
-            return "Face ID / Touch ID isn't available on this device. Set it up in Settings, then try again."
+        case .keyGeneration(let error):
+            return "Could not generate a Secure Enclave key: \(error.localizedDescription)"
+        case .signing(let error):
+            return "Face ID authentication failed or was canceled: \(error.localizedDescription)"
         case .secureEnclaveUnavailable:
             return "This device has no Secure Enclave (e.g. the iOS Simulator) — PhysicalKey's identity key requires real hardware."
         }
@@ -58,12 +56,12 @@ enum KeyManagerError: Error, LocalizedError {
 
 // @unchecked Sendable: every stored property below is a `let` constant (no mutable
 // instance state), and all methods either operate on function-local variables or talk to
-// the Keychain/LAContext/SecureEnclave APIs, which are safe for concurrent access on their
-// own — this class has nothing that actually needs actor isolation to share safely.
+// the Keychain/LAContext/Security-framework APIs, which are safe for concurrent access on
+// their own — this class has nothing that actually needs actor isolation to share safely.
 final class KeyManager: @unchecked Sendable {
     static let shared = KeyManager()
 
-    private let keyAccount = "com.physicalkey.identity.privatekey"
+    private let keyTag = Data("com.physicalkey.identity.privatekey".utf8)
     private let deviceIdDefaultsKey = "com.physicalkey.identity.deviceId"
 
     private init() {}
@@ -81,22 +79,14 @@ final class KeyManager: @unchecked Sendable {
         return fresh
     }
 
-    /// P-256 public keys carry their own X.509 SubjectPublicKeyInfo encoder in CryptoKit
-    /// (unlike Curve25519, which only exposes raw bytes) — no hand-rolled prefix constant
-    /// needed here. Confirmed to match what the backend's `crypto.createPublicKey({type:
-    /// 'spki', format: 'der'})` expects: both follow the same RFC 5480 encoding for
-    /// id-ecPublicKey / prime256v1.
-    private func spkiDERBase64(for publicKey: P256.Signing.PublicKey) -> String {
-        publicKey.derRepresentation.base64EncodedString()
-    }
-
-    /// True if a key has already been generated (i.e. this isn't first launch). Checking
-    /// existence doesn't require a biometric prompt; reading the key material does.
+    /// True if a P-256 Secure Enclave identity has already been generated for this app.
+    /// Existence-only check (no export/decode needed — the key never leaves the Secure
+    /// Enclave, so there's no "wrong format" case to guard against the way the old
+    /// CryptoKit `dataRepresentation` blob had).
     var hasIdentity: Bool {
-        var query = baseQuery()
-        query[kSecReturnData as String] = false
-        let status = SecItemCopyMatching(query as CFDictionary, nil)
-        return status == errSecSuccess
+        var query = keyQuery()
+        query[kSecReturnRef as String] = false
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
     }
 
     /// Generates and stores a new identity, replacing any existing one. Call this once,
@@ -105,84 +95,119 @@ final class KeyManager: @unchecked Sendable {
     /// registered for this deviceId, which is rejected as a hijack attempt by design.
     @discardableResult
     func createIdentity() throws -> String {
-        guard SecureEnclave.isAvailable else {
-            throw KeyManagerError.secureEnclaveUnavailable
-        }
-
         guard let accessControl = SecAccessControlCreateWithFlags(
             nil,
             kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly,
-            .biometryCurrentSet,
+            [.privateKeyUsage, .biometryCurrentSet],
             nil
         ) else {
             throw KeyManagerError.keychainWrite(errSecParam)
         }
 
-        let privateKey = try SecureEnclave.P256.Signing.PrivateKey(accessControl: accessControl)
-        let publicKeyB64 = spkiDERBase64(for: privateKey.publicKey)
+        SecItemDelete(keyQuery() as CFDictionary) // clear any previous identity first
 
-        var query = baseQuery()
-        query[kSecValueData as String] = privateKey.dataRepresentation
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String: 256,
+            kSecAttrTokenID as String: kSecAttrTokenIDSecureEnclave,
+            kSecPrivateKeyAttrs as String: [
+                kSecAttrIsPermanent as String: true,
+                kSecAttrApplicationTag as String: keyTag,
+                kSecAttrAccessControl as String: accessControl
+            ]
+        ]
 
-        SecItemDelete(baseQuery() as CFDictionary) // clear any previous identity first
-        let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw KeyManagerError.keychainWrite(status)
+        var genError: Unmanaged<CFError>?
+        guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &genError) else {
+            if let genError {
+                throw KeyManagerError.keyGeneration(genError.takeRetainedValue() as Error)
+            }
+            throw KeyManagerError.secureEnclaveUnavailable
         }
 
-        return publicKeyB64
+        guard let publicKey = SecKeyCopyPublicKey(privateKey) else {
+            throw KeyManagerError.keyGeneration(NSError(domain: "KeyManager", code: -1))
+        }
+        return try spkiDERBase64(for: publicKey)
     }
 
-    /// Signs `message` with the stored Secure Enclave private key. The Secure Enclave
+    /// Signs `message` with the stored Secure Enclave private key. `SecKeyCreateSignature`
     /// itself prompts Face ID / Touch ID here (per the access control baked in at
-    /// `createIdentity()` time) — no separate Keychain-level biometric read happens first.
-    /// Throws if the user cancels, biometrics fail, or no identity has been created yet.
+    /// `createIdentity()` time). Throws if the user cancels, biometrics fail, or no
+    /// identity has been created yet.
     func sign(_ message: String) async throws -> String {
-        var query = baseQuery()
-        query[kSecReturnData as String] = true
-
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let keyData = result as? Data else {
-            throw KeyManagerError.keychainRead(status)
-        }
-
         let context = LAContext()
         context.localizedReason = "Authenticate to PhysicalKey"
-        let privateKey = try SecureEnclave.P256.Signing.PrivateKey(
-            dataRepresentation: keyData,
-            authenticationContext: context
-        )
-        let signature = try privateKey.signature(for: Data(message.utf8))
-        // DER is Node's `crypto.sign`/`crypto.verify` default encoding for EC signatures
-        // (the `dsaEncoding` option defaults to `'der'`), so sending derRepresentation
-        // here needs no format negotiation on the backend side.
-        return signature.derRepresentation.base64EncodedString()
-    }
 
-    /// Public key for the currently stored identity, if any. Reconstructing the
-    /// SecureEnclave key from its stored dataRepresentation just to read the public half
-    /// doesn't require biometrics — CryptoKit doesn't gate deriving a public key, only
-    /// signing with the private one.
-    func currentPublicKeyB64() async throws -> String {
-        var query = baseQuery()
-        query[kSecReturnData as String] = true
+        var query = keyQuery()
+        query[kSecReturnRef as String] = true
+        query[kSecUseAuthenticationContext as String] = context
 
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let keyData = result as? Data else {
+        guard status == errSecSuccess, let privateKey = result else {
             throw KeyManagerError.keychainRead(status)
         }
+        // swiftlint:disable:next force_cast — SecItemCopyMatching with kSecReturnRef on a
+        // kSecClassKey query always returns a SecKey; there's no other CF type it could be.
+        let secKey = privateKey as! SecKey
 
-        let privateKey = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: keyData)
-        return spkiDERBase64(for: privateKey.publicKey)
+        var signError: Unmanaged<CFError>?
+        guard let signature = SecKeyCreateSignature(
+            secKey,
+            .ecdsaSignatureMessageX962SHA256,
+            Data(message.utf8) as CFData,
+            &signError
+        ) else {
+            throw KeyManagerError.signing(signError?.takeRetainedValue() as Error? ?? NSError(domain: "KeyManager", code: -1))
+        }
+        // Node's `crypto.sign`/`crypto.verify` default `dsaEncoding` is DER, matching what
+        // ecdsaSignatureMessageX962SHA256 produces — no format negotiation needed backend-side.
+        return (signature as Data).base64EncodedString()
     }
 
-    private func baseQuery() -> [String: Any] {
+    /// Public key for the currently stored identity, if any. Reading the public key doesn't
+    /// require biometrics — only signing with the private half does.
+    func currentPublicKeyB64() async throws -> String {
+        var query = keyQuery()
+        query[kSecReturnRef as String] = true
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let privateKey = result else {
+            throw KeyManagerError.keychainRead(status)
+        }
+        let secKey = privateKey as! SecKey
+
+        guard let publicKey = SecKeyCopyPublicKey(secKey) else {
+            throw KeyManagerError.keychainRead(errSecParam)
+        }
+        return try spkiDERBase64(for: publicKey)
+    }
+
+    /// `SecKeyCopyExternalRepresentation` on an EC public key returns the raw X9.62 point
+    /// (0x04 || 32-byte X || 32-byte Y, 65 bytes for P-256) — not SPKI DER the way
+    /// CryptoKit's `derRepresentation` was. The backend's `crypto.createPublicKey({type:
+    /// 'spki', format: 'der'})` expects full SPKI DER, so the fixed RFC 5480 header for
+    /// id-ecPublicKey / prime256v1 is prepended by hand here — a well-known, constant
+    /// 26-byte prefix, the same one CryptoKit was generating under the hood.
+    private func spkiDERBase64(for publicKey: SecKey) throws -> String {
+        var error: Unmanaged<CFError>?
+        guard let rawPoint = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else {
+            throw KeyManagerError.keyGeneration(error?.takeRetainedValue() as Error? ?? NSError(domain: "KeyManager", code: -1))
+        }
+        let p256SPKIHeader: [UInt8] = [
+            0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
+            0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00
+        ]
+        return (Data(p256SPKIHeader) + rawPoint).base64EncodedString()
+    }
+
+    private func keyQuery() -> [String: Any] {
         [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrAccount as String: keyAccount,
-            kSecAttrService as String: "com.physicalkey.app"
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: keyTag,
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom
         ]
     }
 }
