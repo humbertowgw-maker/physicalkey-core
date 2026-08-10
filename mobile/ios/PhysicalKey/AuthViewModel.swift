@@ -108,6 +108,7 @@ final class AuthViewModel: ObservableObject {
                     ratchetAttestation: ratchetOutcome?.attestation
                 )
                 log("Device verified. Full access granted.")
+                Self.debugWriteCredentials(verified.gitCredentials)
 
                 bluetooth.disconnect()
                 stage = .authenticated(sessionToken: verified.sessionToken, gitCredentials: verified.gitCredentials)
@@ -229,4 +230,22 @@ final class AuthViewModel: ObservableObject {
         }
         return "This phone has an outdated pairing with this key device. Go to Settings → Bluetooth, tap the (i) next to \"PhysicalKey\", choose \"Forget This Device\", then try connecting again."
     }
+
+    /// Debug-only escape hatch for `xcrun devicectl device copy from` to pull the just-issued
+    /// credentials straight off the device — for demoing on a dev Mac that isn't signed into
+    /// the same Apple ID as the phone, so Universal Clipboard isn't available. Never compiled
+    /// into a release build; the in-app copy-to-clipboard view is the real, shipping path.
+    #if DEBUG
+    private static func debugWriteCredentials(_ credentials: PhysicalKeyAPI.GitCredentials) {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let url = docs.appendingPathComponent("git-credentials.json")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        if let data = try? encoder.encode(credentials) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+    #else
+    private static func debugWriteCredentials(_ credentials: PhysicalKeyAPI.GitCredentials) {}
+    #endif
 }
