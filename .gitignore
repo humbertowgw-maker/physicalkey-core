@@ -12,6 +12,10 @@ backend/keys/
 # SQLite persistence (device/git/honeypot state — local runtime data, not source)
 backend/data/
 
+# Demo git-gate vault — a real bare repo created at runtime, not source
+demo/vault.git/
+demo/.seed-tmp/
+
 # Node logs and package manager artifacts
 npm-debug.log*
 *.log
