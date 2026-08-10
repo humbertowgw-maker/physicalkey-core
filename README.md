@@ -166,7 +166,7 @@ See [SETUP_COMPLETE.md](./SETUP_COMPLETE.md) for the current setup and validatio
 
 ## Roadmap
 
-### Phase 1: Authentication (August 2026 — live now)
+### Phase 1: Authentication (August 2026 — closed 2026-08-10)
 
 - [x] Git repository authentication
 - [x] API credential management

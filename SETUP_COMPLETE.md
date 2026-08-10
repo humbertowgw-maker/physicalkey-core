@@ -1,5 +1,42 @@
 # PhysicalKey Local Backend Setup — Results
 
+## CLOSED: Phase 1 — Authentication (2026-08-10)
+
+Every item in the README's Phase 1 checklist — git repository authentication, API
+credential management, multi-device support, organization/team management, audit logging
+and honeypot forensics — has been checked `[x]` since early in the project. What's below
+is the final verification pass before calling the phase formally closed, not new work:
+everything here was already built, this just confirms none of it silently regressed and
+nothing claimed elsewhere was left unverified.
+
+**Re-confirmed today, live, not assumed from earlier sessions:**
+- `127/127` backend tests passing (`npm test`), zero skipped
+- Production `/health` and `/status` both responding clean
+- The real-access-gate demo (phone → Face ID → BLE → board signature → backend-verified
+  → git credentials → real `git clone`/`push`) — proven live end to end, not just built
+- The tamper-evident audit log (SHA-256 hash chain over `admin_actions`) — 5 tests
+  including two that directly tamper with the raw SQLite file to confirm detection works
+- The Phase 2 honeypot repo (`/backup.git`) — a real deploy bug (Alpine's `git` doesn't
+  ship `git-http-backend`) was caught and fixed by actually building and running the
+  Docker image, not just trusting `npm test`
+
+**Extras shipped beyond the original Phase 1 scope, folded into the closeout because
+they materially change what "Phase 1 done" means:** Secure Enclave P-256 phone identity
+(two real CryptoKit bugs found and fixed on hardware, Aug 8–9), BLE MITM protection via
+per-unit passkey pairing, and the session-ratchet's move from client-reported to
+backend-verified attestation.
+
+**Known, intentionally out of scope — not gaps in Phase 1, gaps in what Phase 1 was ever
+meant to cover:** no self-host/HA path (single Railway process, single SQLite file — see
+`backend/SELF_HOSTING.md`'s own "If you need real HA" section), no HSM/KMS-backed
+signing key, no factory device-attestation certificate. All three need a real
+infrastructure or manufacturing decision, not a code change, and are deliberately not
+being solved under a "close out Phase 1 today" banner just to look finished.
+
+**No open items found within Phase 1's actual scope.** See the competitive audit and
+security audit artifacts (2026-08-05, re-verified 2026-08-10) for the fuller record of
+what was checked to reach that conclusion.
+
 ## RESOLVED: Secure Enclave signing was broken in CryptoKit itself, not the app — fixed by switching to raw Security-framework SecKey APIs (2026-08-08/09)
 
 Picked up exactly where the 2026-08-07 session paused (see the "IN PROGRESS" section
