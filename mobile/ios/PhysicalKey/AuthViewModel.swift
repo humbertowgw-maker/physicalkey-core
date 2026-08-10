@@ -10,7 +10,7 @@ final class AuthViewModel: ObservableObject {
         case phoneVerifying
         case phoneVerified(deviceChallengeId: String, deviceChallenge: String)
         case connectingToDevice
-        case authenticated(sessionToken: String)
+        case authenticated(sessionToken: String, gitCredentials: PhysicalKeyAPI.GitCredentials)
         case failed(String)
         case repairing
     }
@@ -110,7 +110,7 @@ final class AuthViewModel: ObservableObject {
                 log("Device verified. Full access granted.")
 
                 bluetooth.disconnect()
-                stage = .authenticated(sessionToken: verified.sessionToken)
+                stage = .authenticated(sessionToken: verified.sessionToken, gitCredentials: verified.gitCredentials)
             } catch {
                 log("Device auth failed: \(error)")
                 stage = .failed(Self.describe(error, action: "connect to the key device"))

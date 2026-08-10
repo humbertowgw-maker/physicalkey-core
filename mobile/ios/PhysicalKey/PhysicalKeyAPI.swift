@@ -39,7 +39,7 @@ struct PhysicalKeyAPI {
         let phoneSessionToken: String
     }
 
-    struct GitCredentials: Decodable {
+    struct GitCredentials: Decodable, Equatable {
         let username: String
         let password: String
         let scope: String

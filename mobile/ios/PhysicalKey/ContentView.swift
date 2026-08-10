@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ContentView: View {
     @StateObject private var viewModel = AuthViewModel()
@@ -82,9 +83,12 @@ struct ContentView: View {
         case .connectingToDevice:
             Label("Connecting to key device…", systemImage: "wave.3.right")
                 .foregroundStyle(.blue)
-        case .authenticated:
-            Label("Authenticated — full access granted", systemImage: "checkmark.seal.fill")
-                .foregroundStyle(.green)
+        case .authenticated(_, let gitCredentials):
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Authenticated — full access granted", systemImage: "checkmark.seal.fill")
+                    .foregroundStyle(.green)
+                GitCredentialsView(credentials: gitCredentials)
+            }
         case .failed(let message):
             Label(message, systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.red)
@@ -128,6 +132,56 @@ struct ContentView: View {
         case .authenticated:
             EmptyView()
         }
+    }
+}
+
+/// Surfaces the git credentials `/auth/device/verify` actually returns — previously
+/// decoded and immediately discarded, so a real, successful authentication had no way to
+/// hand them to the person who just earned them. Tap-to-copy, not shown as a QR/share
+/// sheet: these are short-lived (24h) and scoped to whatever the backend granted, not
+/// meant to persist anywhere beyond this screen.
+private struct GitCredentialsView: View {
+    let credentials: PhysicalKeyAPI.GitCredentials
+    @State private var copiedField: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Git credentials")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            credentialRow(label: "Username", value: credentials.username)
+            credentialRow(label: "Password", value: credentials.password)
+            Text("Scope: \(credentials.scope) · expires \(credentials.expiresAt.formattedExpiry)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func credentialRow(label: String, value: String) -> some View {
+        HStack {
+            Text(value)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            Button {
+                UIPasteboard.general.string = value
+                copiedField = label
+            } label: {
+                Image(systemName: copiedField == label ? "checkmark" : "doc.on.doc")
+            }
+            .buttonStyle(.borderless)
+            .font(.caption)
+        }
+    }
+}
+
+private extension Double {
+    var formattedExpiry: String {
+        Date(timeIntervalSince1970: self / 1000).formatted(date: .omitted, time: .shortened)
     }
 }
 
