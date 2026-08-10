@@ -11,7 +11,7 @@ import { validateDeviceSignature, registerDevice } from './auth/device-auth.js';
 import { grantGitAccess, parseBasicAuth, validateGitCredentials, revokeGitAccess } from './git/git-credentials.js';
 import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
 import { getIdentity, listIdentities, resetIdentity, setRecoveryPolicy, RecoveryPolicyLockedError, revokeSessionsIssuedBefore, isSessionRevoked } from './auth/identity-admin.js';
-import { logAdminAction, getAdminActionLog, getOrgActionLog } from './audit/log.js';
+import { logAdminAction, getAdminActionLog, getOrgActionLog, verifyAuditChain } from './audit/log.js';
 import { isValidRatchetStatus, recordRatchetStatus, getRatchetState, clearRatchetState, verifyAndRecordRatchetAttestation } from './auth/ratchet.js';
 import {
   createOrganization, getOrganization, getMembership, listMembers, addMember, removeMember,
@@ -859,6 +859,13 @@ app.delete('/admin/identities/:deviceId', requireAdmin, (req, res) => {
 // deviceId, and when. Read-only; entries are written by the actions themselves.
 app.get('/admin/audit-log', requireAdmin, (req, res) => {
   res.json({ entries: getAdminActionLog() });
+});
+
+// Recomputes the hash chain over every admin_actions row and reports whether it's intact
+// — detects an edited or deleted row, not just lists what's currently there. Tamper-
+// evident, not tamper-proof (see audit/log.js's own comment on that limit).
+app.get('/admin/audit-log/verify', requireAdmin, (req, res) => {
+  res.json(verifyAuditChain());
 });
 
 // Interim device-provenance allow-list (see auth/device-allowlist.js). Enforcement itself

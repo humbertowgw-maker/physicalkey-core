@@ -218,6 +218,15 @@ const identitiesColumns = db.prepare("PRAGMA table_info(identities)").all().map(
 if (!identitiesColumns.includes('recovery_policy')) {
   db.exec("ALTER TABLE identities ADD COLUMN recovery_policy TEXT NOT NULL DEFAULT 'self-service'");
 }
+
+// Migration for a database created before admin_actions was hash-chained (see
+// audit/log.js) — plain nullable columns, no rebuild needed. Rows written before this
+// migration have NULL hash/prev_hash and are treated as outside the verifiable chain
+// (verifyAuditChain starts from the first row that has a hash), not as a broken chain.
+if (!adminActionsColumns.includes('hash')) {
+  db.exec('ALTER TABLE admin_actions ADD COLUMN prev_hash TEXT');
+  db.exec('ALTER TABLE admin_actions ADD COLUMN hash TEXT');
+}
 // Only safe to create once org_id is guaranteed to exist — on a fresh database this is a
 // no-op right after CREATE TABLE; on an existing one, only after the migration above.
 db.exec('CREATE INDEX IF NOT EXISTS idx_admin_actions_org ON admin_actions(org_id)');
