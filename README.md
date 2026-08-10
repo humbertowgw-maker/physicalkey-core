@@ -68,9 +68,13 @@ Threat model highlights:
 - Multi-tenant organization and team management
 - Device provenance tracking and anti-clone controls (admin allow-list, enforced)
 - Session-ratchet state machine, backend-verified (not client-asserted)
-- Honeypot forensics system
-- Git credential issuance tied to verified device sessions
-- Audit log and admin recovery tooling
+- Honeypot forensics system, including a real bait git repository (`/backup.git`) served
+  over git smart-HTTP — logs every hit's attempted credentials and user-agent, not just
+  the fact of an attempt
+- Git credential issuance tied to verified device sessions, with session and
+  git-credential revocation wired to real admin endpoints (not defined-but-unused)
+- Audit log and admin recovery tooling, with the admin action log SHA-256 hash-chained —
+  an edited or deleted entry is detectable, not just recorded
 - Per-identity recovery policy: `permanent` identities are code-enforced as
   unresettable (no admin override exists in the code path); `self-service` identities
   can be re-paired via a board-signed proof of physical possession, with no admin
@@ -153,7 +157,10 @@ See [SETUP_COMPLETE.md](./SETUP_COMPLETE.md) for the current setup and validatio
 - Cryptographically verified challenge-response
 - Backend-enforced organization and team isolation
 - Device binding and provenance checks
-- Audit records for authentication attempts
+- Audit records for authentication attempts, hash-chained so an edited or deleted entry
+  is detectable (tamper-evident, not tamper-proof — see [Technical Details](#cryptography))
+- Sessions and git credentials can be revoked before their natural expiry, not just left
+  to time out
 - A `permanent` recovery policy is a literal, code-level guarantee, not a promise —
   the admin reset endpoint refuses to touch it, with no override path anywhere in
   the code
@@ -231,7 +238,7 @@ cd backend
 npm test
 ```
 
-The beta release includes 86 automated tests.
+The beta release includes 127 automated tests.
 
 ## Reporting Security Issues
 
