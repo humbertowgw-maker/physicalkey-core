@@ -176,7 +176,7 @@ See [SETUP_COMPLETE.md](./SETUP_COMPLETE.md) for the current setup and validatio
 
 ### Phase 2: Honeypot (August–September 2026)
 
-- [ ] Deploy a honeypot Git repository
+- [x] Deploy a honeypot Git repository
 - [ ] Collect attacker techniques
 - [ ] Publish forensics
 

@@ -1,4 +1,10 @@
-FROM node:26-alpine
+# Debian-based, not node:26-alpine: Alpine's git apk build excludes git-http-backend
+# entirely (confirmed — it's not a missing package, Alpine's own git build doesn't ship
+# it), and the honeypot bait repo (honeypot/bait-repo.js) and server.js's /backup.git
+# route both need it to serve real git smart-HTTP. Debian's git package includes it.
+FROM node:26-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

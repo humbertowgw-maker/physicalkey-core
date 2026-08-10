@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import path from 'path';
+import { spawn, execSync } from 'child_process';
 import express from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
@@ -10,6 +11,7 @@ import { validatePhoneAttestation } from './auth/phone-auth.js';
 import { validateDeviceSignature, registerDevice } from './auth/device-auth.js';
 import { grantGitAccess, parseBasicAuth, validateGitCredentials, revokeGitAccess } from './git/git-credentials.js';
 import { honeypotLogger, activateHoneypot, getForensicsReport, getClientIp } from './honeypot/logger.js';
+import { ensureBaitRepo, baitRepoDir } from './honeypot/bait-repo.js';
 import { getIdentity, listIdentities, resetIdentity, setRecoveryPolicy, RecoveryPolicyLockedError, revokeSessionsIssuedBefore, isSessionRevoked } from './auth/identity-admin.js';
 import { logAdminAction, getAdminActionLog, getOrgActionLog, verifyAuditChain } from './audit/log.js';
 import { isValidRatchetStatus, recordRatchetStatus, getRatchetState, clearRatchetState, verifyAndRecordRatchetAttestation } from './auth/ratchet.js';
@@ -912,6 +914,78 @@ app.get('/api/honeypot/fake-database', (req, res) => {
   });
 });
 
+// Honeypot git repository (Phase 2 roadmap item) — a bare repo that looks like an
+// internal credentials backup, served over real git smart-HTTP via `git-http-backend`.
+// Unlike /git/auth (which only grants to a real, backend-verified session), this
+// unconditionally serves the bait content to anyone who requests it and unconditionally
+// logs the attempt — same "always let them in, log what they did" shape as the
+// fake-database decoy above, just for a git client. Real value is in what got logged:
+// what username/password a scanner tried, whether it only cloned or also attempted a
+// push, its user-agent — that's the "collect attacker techniques" half of Phase 2; the
+// honeypot logging and /admin/forensics dashboard it feeds already existed.
+const GIT_HTTP_BACKEND = execSync('git --exec-path').toString().trim() + '/git-http-backend';
+
+app.all(/^\/backup\.git(\/.*)?$/, (req, res) => {
+  const creds = parseBasicAuth(req);
+  activateHoneypot(getClientIp(req), 'Honeypot git repo accessed', {
+    path: req.path,
+    method: req.method,
+    attemptedUsername: creds?.username,
+    userAgent: req.get('user-agent')
+  });
+
+  const env = {
+    ...process.env,
+    GIT_PROJECT_ROOT: dataDir,
+    GIT_HTTP_EXPORT_ALL: '1',
+    PATH_INFO: req.path,
+    QUERY_STRING: req.originalUrl.split('?')[1] || '',
+    REQUEST_METHOD: req.method,
+    CONTENT_TYPE: req.get('content-type') || '',
+    CONTENT_LENGTH: req.get('content-length') || '0',
+    REMOTE_USER: 'honeypot',
+    REMOTE_ADDR: getClientIp(req),
+    GATEWAY_INTERFACE: 'CGI/1.1',
+    SERVER_PROTOCOL: 'HTTP/1.1',
+    SERVER_SOFTWARE: 'physicalkey-honeypot'
+  };
+
+  const child = spawn(GIT_HTTP_BACKEND, [], { env, cwd: dataDir });
+  req.pipe(child.stdin);
+
+  let headerBuf = Buffer.alloc(0);
+  let headersSent = false;
+  child.stdout.on('data', (chunk) => {
+    if (headersSent) { res.write(chunk); return; }
+    headerBuf = Buffer.concat([headerBuf, chunk]);
+    const crlfIdx = headerBuf.indexOf('\r\n\r\n');
+    const lfIdx = headerBuf.indexOf('\n\n');
+    const candidates = [crlfIdx, lfIdx].filter((i) => i !== -1);
+    if (candidates.length === 0) return;
+    const idx = Math.min(...candidates);
+    const sepLen = idx === crlfIdx ? 4 : 2;
+    const headerText = headerBuf.slice(0, idx).toString('latin1');
+    const rest = headerBuf.slice(idx + sepLen);
+    const headers = {};
+    for (const line of headerText.split(/\r?\n/)) {
+      const colon = line.indexOf(':');
+      if (colon === -1) continue;
+      headers[line.slice(0, colon).trim()] = line.slice(colon + 1).trim();
+    }
+    const status = headers['Status'] ? parseInt(headers['Status'], 10) : 200;
+    delete headers['Status'];
+    res.writeHead(status, headers);
+    if (rest.length) res.write(rest);
+    headersSent = true;
+  });
+  child.stderr.on('data', (d) => console.error('[honeypot-git]', d.toString().trim()));
+  child.on('close', () => { if (!res.writableEnded) res.end(); });
+  child.on('error', (err) => {
+    console.error('[honeypot-git] failed to spawn git-http-backend:', err.message);
+    if (!headersSent) res.status(500).end('internal error');
+  });
+});
+
 // Error handler
 app.use((err, req, res, next) => {
   console.error('Error:', err);
@@ -944,6 +1018,8 @@ if (process.env.NODE_ENV !== 'test') {
   backupTimer.unref();
   scheduledBackup();
 }
+
+ensureBaitRepo();
 
 // Start server
 const PORT = process.env.PORT || 3000;
