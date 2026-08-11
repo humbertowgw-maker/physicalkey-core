@@ -1,4 +1,5 @@
 #include "ratchet.h"
+#include "ratchet_core.h"
 
 #include <cstring>
 
@@ -6,19 +7,9 @@
 #include "esp_random.h"
 #include "nvs.h"
 
-#include "Curve25519.h"
-#include "Hash.h"
-#include "SHA512.h"
-
 static const char *TAG = "ratchet";
 static const char *NVS_NAMESPACE = "physicalkey";
 static const char *NVS_KEY = "ratchet_next";
-
-// Fixed context string, not a secret — HMAC-SHA512 over an already-high-entropy X25519
-// shared secret is a lightweight, sufficient KDF here (equivalent in spirit to
-// HKDF-Expand alone, appropriate when the input keying material already has full
-// entropy, which a 256-bit ECDH output does).
-static const char *NEXT_PROOF_CONTEXT = "physicalkey-ratchet-next-v1";
 
 static bool load_prior_proof(uint8_t out[32]) {
     nvs_handle_t handle;
@@ -39,45 +30,35 @@ static void store_next_proof(const uint8_t proof[32]) {
     nvs_close(handle);
 }
 
+// Thin hardware-facing wrapper: real ESP32 randomness in, real NVS persistence out. All
+// the actual X25519/HMAC math this used to contain directly now lives in ratchet_core.cpp
+// — a pure function with no ESP-IDF dependency, so it can be compiled and tested on the
+// host (see host-tests/). This function's own job is now just wiring hardware to that.
 bool ratchet_run_exchange(const uint8_t phonePublicKey[32], RatchetExchangeResult *out) {
-    uint8_t devicePrivateKey[32];
-    esp_fill_random(devicePrivateKey, sizeof(devicePrivateKey));
-    // dh1 clamps devicePrivateKey in place and writes the corresponding public key.
-    Curve25519::dh1(out->devicePublicKey, devicePrivateKey);
-
-    uint8_t sharedSecret[32];
-    memcpy(sharedSecret, phonePublicKey, 32);
-    // dh2 overwrites sharedSecret with the X25519 result; returns false on a weak point.
-    bool ok = Curve25519::dh2(sharedSecret, devicePrivateKey);
-    memset(devicePrivateKey, 0, sizeof(devicePrivateKey)); // ephemeral — never persisted
-
-    if (!ok) {
-        ESP_LOGW(TAG, "X25519 exchange failed (weak point) — leaving ratchet state untouched");
-        memset(sharedSecret, 0, sizeof(sharedSecret));
-        return false;
-    }
-
     uint8_t priorProof[32];
     bool hadPriorState = load_prior_proof(priorProof);
 
+    uint8_t rc[16];
     if (hadPriorState) {
-        esp_fill_random(out->rc, sizeof(out->rc));
-        hmac<SHA512>(out->deviceProof, sizeof(out->deviceProof), priorProof, sizeof(priorProof), out->rc, sizeof(out->rc));
-        out->status = 1;
+        esp_fill_random(rc, sizeof(rc));
+    } else {
+        memset(rc, 0, sizeof(rc));
+    }
+
+    bool ok = ratchet_derive(phonePublicKey, priorProof, hadPriorState, rc, out);
+
+    if (!ok) {
+        ESP_LOGW(TAG, "X25519 exchange failed (weak point) — leaving ratchet state untouched");
+        return false;
+    }
+
+    if (hadPriorState) {
         ESP_LOGI(TAG, "Ratchet exchange: prior state found, offering proof");
     } else {
-        memset(out->rc, 0, sizeof(out->rc));
-        memset(out->deviceProof, 0, sizeof(out->deviceProof));
-        out->status = 0;
         ESP_LOGI(TAG, "Ratchet exchange: no prior state (bootstrap)");
     }
 
-    uint8_t nextProof[32];
-    hmac<SHA512>(nextProof, sizeof(nextProof), sharedSecret, sizeof(sharedSecret), NEXT_PROOF_CONTEXT, strlen(NEXT_PROOF_CONTEXT));
-    memset(sharedSecret, 0, sizeof(sharedSecret));
-    memcpy(out->nextProof, nextProof, sizeof(nextProof));
-
-    store_next_proof(nextProof);
+    store_next_proof(out->nextProof);
     ESP_LOGI(TAG, "Ratchet state advanced for the next session.");
 
     return true;

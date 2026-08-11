@@ -132,6 +132,25 @@ bring-up, `NVS partition "nvs" is encrypted.` in each boot log, survives a reboo
 identity intact). Each got a fresh identity as part of the required erase, so each needs
 (re-)pairing with a phone before use.
 
+## Automated tests
+
+`host-tests/` (added 2026-08-10) — the session-ratchet's real crypto/protocol logic
+(`main/ratchet_core.cpp`), compiled and run natively on the dev machine, no board or
+ESP-IDF toolchain needed:
+
+```bash
+cd hardware/firmware-idf/PhysicalKeyDevice/host-tests
+./run.sh
+```
+
+Links the exact same vendored `Curve25519.cpp`/`SHA512.cpp`/`Hash.cpp`/`Crypto.cpp` the
+real board uses — proves the phone and device sides of the X25519 exchange genuinely
+agree on a shared secret, the continuity proof chains correctly across sessions, and a
+known-weak X25519 point is rejected. See `host-tests/README.md` for what this can and
+can't cover (most of the firmware — BLE, GATT, NVS — still needs real hardware) and a
+real small bug it caught while being written (a wasted `esp_fill_random()` call that
+`Curve25519::dh1()` was silently discarding).
+
 ## What's NOT done yet
 
 - **Boards not yet tested against multiple independent phones as separate real users.**
