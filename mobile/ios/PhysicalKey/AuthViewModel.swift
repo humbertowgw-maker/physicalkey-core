@@ -206,7 +206,7 @@ final class AuthViewModel: ObservableObject {
     /// Prefers a `LocalizedError`'s human-readable message (e.g. KeyManagerError's Keychain
     /// explanations) over dumping the raw Swift error description, which for something like
     /// `keychainWrite(-50)` tells the user nothing actionable.
-    private static func describe(_ error: Error, action: String) -> String {
+    static func describe(_ error: Error, action: String) -> String {
         if let message = bluetoothPairingMessage(for: error) {
             return message
         }
@@ -222,7 +222,7 @@ final class AuthViewModel: ObservableObject {
     /// won't retry pairing on its own in this state. Confirmed against a real device during
     /// testing: the fix is always to forget the stale pairing and reconnect, so tell the
     /// user that directly instead of surfacing the raw CoreBluetooth error code.
-    private static func bluetoothPairingMessage(for error: Error) -> String? {
+    static func bluetoothPairingMessage(for error: Error) -> String? {
         let nsError = error as NSError
         guard nsError.domain == CBErrorDomain,
               nsError.code == CBError.peerRemovedPairingInformation.rawValue else {

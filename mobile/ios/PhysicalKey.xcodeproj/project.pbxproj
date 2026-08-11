@@ -13,14 +13,27 @@
 		2998E690B0E88BCF4B5C0ECB /* PhysicalKeyApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC605602BE0E09BB723907B6 /* PhysicalKeyApp.swift */; };
 		5FF86FAC6AA623699A6804C7 /* OrganizationViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF408DC49EBE7DE23CF1AE54 /* OrganizationViewModel.swift */; };
 		688157C70DA8177F25D8C1C7 /* LivenessSpike.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF5627678CED88CF9F8885E3 /* LivenessSpike.swift */; };
+		7C28CE7AE2654544FEE5D06B /* AuthViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F794E566E33209EDA4DC15BB /* AuthViewModelTests.swift */; };
 		81329ED07C645AB92D440EFC /* PhysicalKeyAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B1FBE00DC6F78B9D2490375 /* PhysicalKeyAPI.swift */; };
 		A832C1D75BFCB04293E3131C /* TeamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A399FED7F3B305FAE37A665 /* TeamView.swift */; };
 		B859B48C3D90551FDC516EAA /* KeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1673C4E131A63D20EDCAF518 /* KeyManager.swift */; };
 		B8E69D7D0C99CF19095CDD79 /* RatchetManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 002B228ABF6D3E5F984C17C1 /* RatchetManager.swift */; };
 		BBA845A301D98FED0EA6045A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F037FF1DDD1650B16ECCDA9 /* ContentView.swift */; };
 		BCD884386943011B2DE92AC3 /* CertificatePinning.swift in Sources */ = {isa = PBXBuildFile; fileRef = E77B909CFD14176167912310 /* CertificatePinning.swift */; };
+		DAB5FBEFE7890D1EC348FC4C /* PhysicalKeyAPITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F8811C987817494D7F3AFA /* PhysicalKeyAPITests.swift */; };
+		F57EE6F60F3EA9635480D255 /* KeyManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7703A093DD6FD31579BC32A /* KeyManagerTests.swift */; };
 		F96DEBAD1DA7BEF058F9232F /* AuthViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CA6D4F45E2E62C3E0B324FF /* AuthViewModel.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		0DEB97D3373F456F46316284 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 5D4E07B0E025F0C3C0377682 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E01122BD118B99E7E75C0397;
+			remoteInfo = PhysicalKey;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		002B228ABF6D3E5F984C17C1 /* RatchetManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RatchetManager.swift; sourceTree = "<group>"; };
@@ -30,13 +43,17 @@
 		248EABAD6771BF9B4147E09A /* DeviceBluetoothManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceBluetoothManager.swift; sourceTree = "<group>"; };
 		3B1FBE00DC6F78B9D2490375 /* PhysicalKeyAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicalKeyAPI.swift; sourceTree = "<group>"; };
 		4F037FF1DDD1650B16ECCDA9 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		60C25F04CFA8812528E595AB /* PhysicalKeyTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PhysicalKeyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		705211E5DD3DDF3AA02D6B5A /* LivenessSpikeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivenessSpikeView.swift; sourceTree = "<group>"; };
 		98109053DDB9665234E0B9E5 /* PhysicalKey.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = PhysicalKey.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BC605602BE0E09BB723907B6 /* PhysicalKeyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicalKeyApp.swift; sourceTree = "<group>"; };
 		E77B909CFD14176167912310 /* CertificatePinning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CertificatePinning.swift; sourceTree = "<group>"; };
+		E7F8811C987817494D7F3AFA /* PhysicalKeyAPITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicalKeyAPITests.swift; sourceTree = "<group>"; };
 		EF408DC49EBE7DE23CF1AE54 /* OrganizationViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrganizationViewModel.swift; sourceTree = "<group>"; };
 		EF5627678CED88CF9F8885E3 /* LivenessSpike.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LivenessSpike.swift; sourceTree = "<group>"; };
 		F44218E4C282A21C70E6BBFD /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F7703A093DD6FD31579BC32A /* KeyManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyManagerTests.swift; sourceTree = "<group>"; };
+		F794E566E33209EDA4DC15BB /* AuthViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthViewModelTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -44,6 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				44C5ED0ECFEF9AA1136BA751 /* PhysicalKey */,
+				5E180F445B39EBACAA7292AA /* PhysicalKeyTests */,
 				BD7A4559AF3B400099D247CD /* Products */,
 			);
 			sourceTree = "<group>";
@@ -68,10 +86,21 @@
 			path = PhysicalKey;
 			sourceTree = "<group>";
 		};
+		5E180F445B39EBACAA7292AA /* PhysicalKeyTests */ = {
+			isa = PBXGroup;
+			children = (
+				F794E566E33209EDA4DC15BB /* AuthViewModelTests.swift */,
+				F7703A093DD6FD31579BC32A /* KeyManagerTests.swift */,
+				E7F8811C987817494D7F3AFA /* PhysicalKeyAPITests.swift */,
+			);
+			path = PhysicalKeyTests;
+			sourceTree = "<group>";
+		};
 		BD7A4559AF3B400099D247CD /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				98109053DDB9665234E0B9E5 /* PhysicalKey.app */,
+				60C25F04CFA8812528E595AB /* PhysicalKeyTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -79,6 +108,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		0B10B5E068F35DA1C5BBB6FE /* PhysicalKeyTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3EA1502709C069C0494E7B52 /* Build configuration list for PBXNativeTarget "PhysicalKeyTests" */;
+			buildPhases = (
+				EC726EEA68EF6F3708AD3E51 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B2E271043F256FC7DA23281F /* PBXTargetDependency */,
+			);
+			name = PhysicalKeyTests;
+			packageProductDependencies = (
+			);
+			productName = PhysicalKeyTests;
+			productReference = 60C25F04CFA8812528E595AB /* PhysicalKeyTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		E01122BD118B99E7E75C0397 /* PhysicalKey */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = DB204BC27662829B50388CB9 /* Build configuration list for PBXNativeTarget "PhysicalKey" */;
@@ -127,6 +174,7 @@
 			projectRoot = "";
 			targets = (
 				E01122BD118B99E7E75C0397 /* PhysicalKey */,
+				0B10B5E068F35DA1C5BBB6FE /* PhysicalKeyTests */,
 			);
 		};
 /* End PBXProject section */
@@ -162,7 +210,25 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		EC726EEA68EF6F3708AD3E51 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7C28CE7AE2654544FEE5D06B /* AuthViewModelTests.swift in Sources */,
+				F57EE6F60F3EA9635480D255 /* KeyManagerTests.swift in Sources */,
+				DAB5FBEFE7890D1EC348FC4C /* PhysicalKeyAPITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B2E271043F256FC7DA23281F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E01122BD118B99E7E75C0397 /* PhysicalKey */;
+			targetProxy = 0DEB97D3373F456F46316284 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		27F30F89EDA95A462F074E57 /* Debug */ = {
@@ -270,6 +336,24 @@
 			};
 			name = Release;
 		};
+		7EF40E0306E8E3B4EEB1670E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.physicalkey.PhysicalKeyTests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PhysicalKey.app/PhysicalKey";
+			};
+			name = Debug;
+		};
 		8A1B963EA6C2DF75F6C09F75 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -326,6 +410,24 @@
 			};
 			name = Release;
 		};
+		9797E7B1F3A28D39DBFD136F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.physicalkey.PhysicalKeyTests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PhysicalKey.app/PhysicalKey";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -334,6 +436,15 @@
 			buildConfigurations = (
 				27F30F89EDA95A462F074E57 /* Debug */,
 				8A1B963EA6C2DF75F6C09F75 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		3EA1502709C069C0494E7B52 /* Build configuration list for PBXNativeTarget "PhysicalKeyTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7EF40E0306E8E3B4EEB1670E /* Debug */,
+				9797E7B1F3A28D39DBFD136F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

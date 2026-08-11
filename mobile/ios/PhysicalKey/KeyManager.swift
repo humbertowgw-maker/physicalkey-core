@@ -196,11 +196,21 @@ final class KeyManager: @unchecked Sendable {
         guard let rawPoint = SecKeyCopyExternalRepresentation(publicKey, &error) as Data? else {
             throw KeyManagerError.keyGeneration(error?.takeRetainedValue() as Error? ?? NSError(domain: "KeyManager", code: -1))
         }
+        return Self.p256SPKIDER(fromRawPoint: rawPoint).base64EncodedString()
+    }
+
+    /// Pure byte-manipulation half of `spkiDERBase64`, split out so it's testable without a
+    /// real Secure Enclave (the Simulator has none) — feed it a real X9.62 point from any
+    /// EC key and check the result actually imports as a valid P-256 SPKI public key, not
+    /// just that the bytes look plausible. Getting this header wrong is exactly the kind of
+    /// silent bug that would make every phone signature fail backend verification, the same
+    /// failure shape this class's own header comment describes debugging once already.
+    static func p256SPKIDER(fromRawPoint rawPoint: Data) -> Data {
         let p256SPKIHeader: [UInt8] = [
             0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
             0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00
         ]
-        return (Data(p256SPKIHeader) + rawPoint).base64EncodedString()
+        return Data(p256SPKIHeader) + rawPoint
     }
 
     private func keyQuery() -> [String: Any] {
