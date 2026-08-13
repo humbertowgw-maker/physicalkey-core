@@ -50,9 +50,17 @@ to PK — dropped, don't chase it.
 - **Stripe/checkout activation** (test-mode credentials → wire into Railway → verify
   real checkout end-to-end). Code side is done and waiting; Humberto said this is the
   last step, after the product itself is finished.
-- **Hardware/manufacturing decision** — no enclosure, no fulfillment path, only 3 bare
-  ESP32 dev boards exist. Selling a physical unit needs this, but it's part of the same
-  "later" bucket as Stripe.
+
+## ✅ Hardware/manufacturing path — decided (2026-08-13)
+
+DIY: 3D-print enclosures + source parts from Alibaba (~$100 to start), open-source the
+hardware design so the community can build/verify/improve it too, pre-order launch later
+— *after* a small self-built batch is proven, not before. `hardware/README.md`'s "Building
+it yourself" section is now a real guide for this (BOM callout still needs Humberto's
+actual sourcing link — flagged as a TODO in the file itself). **Still open:** the exact
+Alibaba listing/part number, and re-confirming the other 2 boards (`...03c9c`, `...00800`)
+are actually re-paired since the encryption migration — don't assume either without
+checking.
 
 ## ⚪ Not started — real scope, not a quick task
 
