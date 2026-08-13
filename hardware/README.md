@@ -1,5 +1,9 @@
 # PhysicalKey IoT Key Fob Firmware
 
+**License: MIT** (see [LICENSE](./LICENSE)) — different from the rest of this repository,
+which is Business Source License 1.1. Everything under `hardware/` is fully open: build
+your own board, flash it, modify it, sell boards built from it, no restriction.
+
 ## Current state: real BLE GATT server, real security, running and verified on physical hardware
 
 - **`firmware-idf/PhysicalKeyDevice/`** — the firmware that's actually running, built

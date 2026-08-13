@@ -2,7 +2,7 @@
 
 **Hardware + phone authentication with cryptographic verification.**
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-BUSL%201.1%20%2B%20MIT%20(hardware)-blue.svg)
 ![Status](https://img.shields.io/badge/status-beta-orange.svg)
 
 > **Project status:** First public beta. This is an early version for development and evaluation, not a finished or production-ready security product.
@@ -250,7 +250,23 @@ Contributions are welcome for hardware support, firmware optimization, iOS UX, b
 
 ## License
 
-MIT License — see [LICENSE](./LICENSE).
+Split by component, on purpose:
+
+- **`hardware/`** (firmware, schematics, BOM) — **MIT**, see
+  [hardware/LICENSE](./hardware/LICENSE). Fully open: build your own board,
+  flash it, modify it, sell boards built from it — no restriction. This is
+  the part meant to be freely copied, verified, and improved by anyone.
+- **Everything else** (backend, mobile app) — **Business Source License
+  1.1**, see [LICENSE](./LICENSE). Free to read, self-host, and modify for
+  your own use — including running it yourself to secure your own
+  infrastructure — but you can't stand up a competing hosted PhysicalKey
+  service with it. Converts automatically to Apache 2.0 on 2030-08-13.
+
+Why split it: the device's security doesn't depend on anything about its
+design being secret — each unit generates its own key on first boot, in
+hardware, and never shares it — so there's no security cost to the hardware
+being fully open, only upside (trust, community-built boards, independent
+verification). The backend and app are the actual commercial product.
 
 ## Author
 
