@@ -7,6 +7,24 @@ the real one" problem that no longer applies. The real, current app is
 `mobile/ios/PhysicalKey/` in this repo; nothing else. The process below is still accurate and
 worth keeping for when TestFlight submission is actually attempted.
 
+**Status as of 2026-08-13, tested for real, not assumed:** steps 2+ below (archive, automatic
+signing, App ID registration, App Store distribution provisioning profile) all verified
+working via `mobile/ios/ExportOptions.plist` + `xcodebuild -exportArchive
+-allowProvisioningUpdates` — Xcode's already-authenticated session handles all of that
+automatically, no manual cert/profile work needed. **Step 1 (create the App Store Connect app
+record) has NOT been done** — confirmed directly, not inferred: attempting an upload fails
+with `IDEDistributionFetchAppRecordStep: missingApp(bundleId: "com.physicalkey.app")`, a
+clean "no app record exists" error, not a signing problem. That's the one remaining step, and
+it needs a real login at appstoreconnect.apple.com with 2FA — do that, then the archive +
+export + upload can run non-interactively from `mobile/ios/`:
+```bash
+xcodebuild -project PhysicalKey.xcodeproj -scheme PhysicalKey -sdk iphoneos \
+  -configuration Release -destination "generic/platform=iOS" \
+  -archivePath build/PhysicalKey.xcarchive -allowProvisioningUpdates archive
+```
+then add `<key>destination</key><string>upload</string>` to `ExportOptions.plist` and re-run
+the export command below with the same `-allowProvisioningUpdates` flag.
+
 **Prerequisite**: an [Apple Developer Program](https://developer.apple.com/programs/)
 membership ($99/year). If not already enrolled, budget 24–48 hours for approval before
 anything else here is possible.
