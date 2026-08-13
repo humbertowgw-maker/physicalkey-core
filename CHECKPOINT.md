@@ -7,6 +7,12 @@ not here.
 
 **Last updated:** 2026-08-12
 
+**Priority call from Humberto (2026-08-12): Stripe/checkout is now the LAST step, not
+the next one — focus on finishing the actual product first.** A DNS ENOTFOUND report
+earlier the same day was never reproduced (Railway logs clean, both relevant domains
+resolve fine) and Humberto confirmed it was just an "is anything wrong" check, not tied
+to PK — dropped, don't chase it.
+
 ## ✅ Confirmed, don't re-verify
 
 - **Phase 1 (Authentication): closed 2026-08-10.** 127/127 backend tests.
@@ -23,28 +29,30 @@ not here.
   session I wrongly implied this was missing — corrected after checking Xcode's account
   data directly. Don't re-raise this as a blocker.)
 
-## 🔴 Blocked on Humberto — can't proceed without these
+## 🔴 Blocked on Humberto — can't proceed without this
 
-1. **Stripe test-mode credentials** (secret key, price ID, webhook signing secret) —
-   see `backend/.env.example` for the exact variable names. Needed to wire real
-   (test-mode) checkout end-to-end.
-2. **Hardware/manufacturing decision** — no enclosure, no fulfillment path. Only 3 bare
-   ESP32 dev boards exist. Selling a physical unit needs a real decision here.
-3. **Confirm PhysicalKey's actual App Store Connect / TestFlight status.** This Mac has
+1. **Confirm PhysicalKey's actual App Store Connect / TestFlight status.** This Mac has
    *zero* local evidence PhysicalKey was ever archived or uploaded — no
    `~/Library/Developer/Xcode/Archives` folder at all, Xcode Cloud's local DB is
    completely empty, and no provisioning profile here is scoped to `com.physicalkey.app`
    (only a generic wildcard dev profile). If this happened, it was from a different
    Mac — need Humberto to check App Store Connect directly (I can't log into his Apple
-   ID) and report back.
+   ID) and report back. This is the real blocker to "finish PK" right now.
 
 ## 🟡 Ready to execute the moment the above unblocks
 
-- Set the 3 Stripe env vars on Railway, redeploy, run one real test-mode checkout
-  end-to-end (Stripe test card → webhook fires → `/admin/subscriptions` shows it).
 - Archive + upload to TestFlight — steps already written in `mobile/ios/TESTFLIGHT.md`
   — *pending* the App Store Connect status check above (don't start this until that's
   answered, to avoid duplicating an app record that already exists).
+
+## ⏸ Deprioritized to last, by explicit instruction (2026-08-12) — don't chase
+
+- **Stripe/checkout activation** (test-mode credentials → wire into Railway → verify
+  real checkout end-to-end). Code side is done and waiting; Humberto said this is the
+  last step, after the product itself is finished.
+- **Hardware/manufacturing decision** — no enclosure, no fulfillment path, only 3 bare
+  ESP32 dev boards exist. Selling a physical unit needs this, but it's part of the same
+  "later" bucket as Stripe.
 
 ## ⚪ Not started — real scope, not a quick task
 
@@ -55,13 +63,6 @@ not here.
 - **Phase 4 (Public Launch):** Product Hunt, technical write-ups. Depends on App Store
   approval landing first.
 - **Third-party security audit** — roadmapped Oct 2026, nothing scheduled.
-
-## 🟠 Open / unresolved
-
-- **DNS `ENOTFOUND` reported 2026-08-12, not reproduced.** Checked Railway logs (clean),
-  DNS resolution for both `physicalkey.whitegwireless.com` and the Railway backend
-  domain (both resolve fine), Railway domain config (active, no issues). Need the exact
-  error text and where it appeared to chase further — don't assume it's fixed.
 
 ## 🔵 No dependency, pick up anytime
 
