@@ -21,6 +21,19 @@ to PK — dropped, don't chase it.
   passkey pairing → device signs → backend-verified ratchet → `.authenticated` → real
   git credentials issued — confirmed live via on-device log screenshot. This closed the
   one open item from the 2026-08-07/09 session.
+- **Board `...03c9c` found running stale pre-security-fix firmware, reflashed, re-paired,
+  confirmed (2026-08-13).** Boot log showed firmware from commit `5ec8add` (2026-08-06) —
+  one commit *before* `42496c5` added BLE MITM passkey pairing (2026-08-07). That's why no
+  PIN was asked on first reconnect attempt: this board was still on plain Just-Works
+  pairing, a real security gap. Reflashed with `idf.py encrypted-flash` (identity survived
+  — NVS wasn't touched), generated a fresh passkey, Humberto forgot the stale iOS bond and
+  re-paired. Confirmed independently via backend data, not just his report: device's
+  `last_seen` jumped to the exact moment of the retry, access_count incremented, no
+  signature-error events anywhere nearby. **Implication: don't assume any board is running
+  current firmware just because it boots and has an identity — check the boot log's `App
+  version` against `git log` before trusting it, especially before shipping one to anyone.**
+  Board `...00800` ("the spare board") has NOT been checked this way yet — same risk
+  applies, don't assume.
 - **Landing page checkout fixed (2026-08-12).** `physicalkey-landing/index.html`'s
   `API_BASE` was a dead placeholder; now points at the real Railway backend. Committed,
   pushed, deployed, confirmed live.
@@ -65,9 +78,9 @@ hardware design so the community can build/verify/improve it too, pre-order laun
 — *after* a small self-built batch is proven, not before. `hardware/README.md`'s "Building
 it yourself" section is now a real guide for this (BOM callout still needs Humberto's
 actual sourcing link — flagged as a TODO in the file itself). **Still open:** the exact
-Alibaba listing/part number, and re-confirming the other 2 boards (`...03c9c`, `...00800`)
-are actually re-paired since the encryption migration — don't assume either without
-checking.
+Alibaba listing/part number, and board `...00800` — not yet checked for stale firmware or
+re-paired since the encryption migration (see the `...03c9c` finding above; check its boot
+log's `App version` before assuming anything about it).
 
 ## ⚪ Not started — real scope, not a quick task
 
