@@ -49,19 +49,22 @@ to PK — dropped, don't chase it.
 
 ## 🔴 Blocked on Humberto — can't proceed without this
 
-1. **Confirm PhysicalKey's actual App Store Connect / TestFlight status.** This Mac has
-   *zero* local evidence PhysicalKey was ever archived or uploaded — no
-   `~/Library/Developer/Xcode/Archives` folder at all, Xcode Cloud's local DB is
-   completely empty, and no provisioning profile here is scoped to `com.physicalkey.app`
-   (only a generic wildcard dev profile). If this happened, it was from a different
-   Mac — need Humberto to check App Store Connect directly (I can't log into his Apple
-   ID) and report back. This is the real blocker to "finish PK" right now.
+1. **Create the App Store Connect app record.** Confirmed conclusively 2026-08-13, not
+   inferred: a real archive → automatic-signing → export → upload attempt failed with
+   `IDEDistributionFetchAppRecordStep: missingApp(bundleId: "com.physicalkey.app")` — no
+   app record exists at appstoreconnect.apple.com for PhysicalKey. Needs a real login with
+   2FA (My Apps → + → New App, bundle ID `com.physicalkey.app`) — I can't do this part.
+   See `mobile/ios/TESTFLIGHT.md` step 1. This is the one remaining blocker to "finish PK."
 
-## 🟡 Ready to execute the moment the above unblocks
+## ✅ Everything else about TestFlight submission is proven working (2026-08-13)
 
-- Archive + upload to TestFlight — steps already written in `mobile/ios/TESTFLIGHT.md`
-  — *pending* the App Store Connect status check above (don't start this until that's
-  answered, to avoid duplicating an app record that already exists).
+Archive, automatic App ID registration, and App Store distribution provisioning all work
+non-interactively via `mobile/ios/ExportOptions.plist` +
+`xcodebuild -exportArchive -allowProvisioningUpdates` — Xcode's already-authenticated
+session (team `9RYL8ZRC3U`) handles all of it, no manual cert/profile work needed. Once
+the app record above exists, add `destination: upload` to `ExportOptions.plist` and
+re-run — see `mobile/ios/TESTFLIGHT.md` for the exact commands. Nothing left to
+rediscover.
 
 ## ⏸ Deprioritized to last, by explicit instruction (2026-08-12) — don't chase
 
