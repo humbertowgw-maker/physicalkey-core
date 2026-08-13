@@ -51,6 +51,13 @@ to PK — dropped, don't chase it.
   real checkout end-to-end). Code side is done and waiting; Humberto said this is the
   last step, after the product itself is finished.
 
+## ✅ Landing page updated to match (2026-08-13)
+
+`physicalkey-landing`'s roadmap section still said "the hardware is being assembled" —
+stale as of yesterday's real end-to-end bonding confirmation and the MIT hardware
+license. Now says the device flow is proven and links to `hardware/` as open source /
+build-your-own. Deployed and confirmed live.
+
 ## ✅ Hardware/manufacturing path — decided (2026-08-13)
 
 DIY: 3D-print enclosures + source parts from Alibaba (~$100 to start), open-source the
