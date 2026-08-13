@@ -98,3 +98,41 @@ test('honeypot decoy endpoint returns decoy data, not anything real', async () =
   assert.equal(body._decoy, true);
   assert.ok(Array.isArray(body.users));
 });
+
+test('/admin/forensics excludes CGNAT-range IPs (100.64.0.0/10) from attackers by default, includes them with includeInternal=true', async () => {
+  await fetch(`${server.baseUrl}/git/auth`, { headers: { 'X-Forwarded-For': '100.64.5.5' } });
+
+  const adminToken = await adminAuth();
+  const defaultRes = await fetch(`${server.baseUrl}/admin/forensics`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  const defaultBody = await defaultRes.json();
+  assert.ok(!defaultBody.attackers.some((a) => a.ip === '100.64.5.5'), 'a CGNAT-range IP is not a real internet attacker source and must not appear by default');
+  assert.ok(defaultBody.summary.internalIPs >= 1, 'summary must report how many IPs were excluded, not hide it silently');
+
+  const includeRes = await fetch(`${server.baseUrl}/admin/forensics?includeInternal=true`, {
+    headers: { Authorization: `Bearer ${adminToken}` }
+  });
+  const includeBody = await includeRes.json();
+  const tagged = includeBody.attackers.find((a) => a.ip === '100.64.5.5');
+  assert.ok(tagged, 'includeInternal=true must still surface the IP for debugging');
+  assert.equal(tagged.internal, true);
+});
+
+test('/admin/forensics excludes IPs listed in KNOWN_INTERNAL_IPS from attackers by default', async () => {
+  const taggedServer = await startServer({ env: { KNOWN_INTERNAL_IPS: '203.0.113.9,203.0.113.10' } });
+  try {
+    await fetch(`${taggedServer.baseUrl}/git/auth`, { headers: { 'X-Forwarded-For': '203.0.113.9' } });
+    await fetch(`${taggedServer.baseUrl}/git/auth`, { headers: { 'X-Forwarded-For': '203.0.113.55' } }); // NOT on the list
+
+    const adminSession = await fullAuth(taggedServer.baseUrl, `admin-phone-${crypto.randomUUID()}`, keypair(), taggedServer.adminDeviceId, keypair());
+    const res = await fetch(`${taggedServer.baseUrl}/admin/forensics`, {
+      headers: { Authorization: `Bearer ${adminSession.sessionToken}` }
+    });
+    const body = await res.json();
+    assert.ok(!body.attackers.some((a) => a.ip === '203.0.113.9'), 'IP on KNOWN_INTERNAL_IPS must be excluded by default');
+    assert.ok(body.attackers.some((a) => a.ip === '203.0.113.55'), 'an IP NOT on the list must still show up as a real external caller');
+  } finally {
+    await taggedServer.stop();
+  }
+});

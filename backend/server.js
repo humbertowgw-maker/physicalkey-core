@@ -695,7 +695,7 @@ const requireAdmin = (req, res, next) => {
 };
 
 app.get('/admin/forensics', requireAdmin, (req, res) => {
-  res.json(getForensicsReport());
+  res.json(getForensicsReport({ includeInternal: req.query.includeInternal === 'true' }));
 });
 
 // Resilience: the database lives on a single Railway volume with no replica, so these
