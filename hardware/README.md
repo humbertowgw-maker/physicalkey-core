@@ -164,19 +164,71 @@ real small bug it caught while being written (a wasted `esp_fill_random()` call 
 
 ## Building it yourself
 
-Requires ESP-IDF v5.3.1 (this session set it up at `~/esp-idf-test/esp-idf` — not part of
-this repo, since it's a multi-GB external toolchain, same as Xcode or Android Studio):
+This firmware and hardware design are MIT-licensed specifically so you can do this — build
+a board, verify it yourself, modify it, even sell boards built from it. Everything below is
+real and tested against physical hardware, not aspirational.
+
+### What you need
+
+- **An original ESP32 chip** (the `ESP32-D0WD-V3` this project was built and verified
+  against, or another ESP32-family board — **not S2/S3/C3**: the NVS encryption scheme this
+  firmware uses depends on a key-protection path that's specific to the original ESP32; see
+  "Flash + NVS encryption" above for why). Any dev board carrying that chip works — this
+  firmware doesn't need anything beyond the bare chip, no extra components wired in.
+- *(TODO — Humberto: drop in the actual Alibaba/AliExpress listing and part number you're
+  sourcing from once you've picked one, so this is a real link instead of a placeholder.)*
+- ESP-IDF v5.3.1 (a multi-GB external toolchain, same as Xcode or Android Studio — not part
+  of this repo). `source <path-to-esp-idf>/export.sh` before any `idf.py` command below.
+
+### Flash it
 
 ```bash
-source ~/esp-idf-test/esp-idf/export.sh
+source <path-to-esp-idf>/export.sh
 cd hardware/firmware-idf/PhysicalKeyDevice
 idf.py set-target esp32
-idf.py -p /dev/cu.usbserial-0001 build flash monitor
+idf.py -p <your-serial-port> build encrypted-flash monitor
 ```
+
+**Always `encrypted-flash`, never plain `flash`.** This firmware ships with flash + NVS
+encryption on (see "Flash + NVS encryption" above) — plain `idf.py flash` on a chip that
+already has (or is enabling) encryption writes a plaintext image the bootloader can't read,
+which boot-loops the board (`RTCWDT_RTC_RESET`, repeating `invalid header` errors). It looks
+alarming but is recoverable — just re-run with `encrypted-flash`. This has bitten this
+project's own team more than once; don't repeat it.
+
+On first boot, the console prints a random 6-digit pairing passkey
+(`NEW PAIRING PASSKEY: XXXXXX`) — write that down (and on the physical unit, if you're
+building more than one) before you close the serial monitor. You'll need it once, the first
+time a phone pairs with this specific board.
+
+### Pairing it with the app — read this before you try
+
+The device generates its own identity (an Ed25519 keypair, derived from and bound to the
+chip's real eFuse MAC) the first time it boots — nothing to configure, nothing the app sends
+it. The **first phone that ever pairs with a given board becomes its owner**
+(trust-on-first-use); pairing is `main/pairing.cpp`'s passkey flow, not "Just Works" — enter
+the 6-digit code from the boot log when your phone prompts for it.
+
+If you're pointing the app at **your own self-hosted backend** (see
+`backend/SELF_HOSTING.md`), this just works — trust-on-first-use is the default, no
+allow-list.
+
+If you're pointing the app at **PhysicalKey's own hosted backend**, know that it runs with
+`ENFORCE_DEVICE_ALLOWLIST=true` — a self-built board's `deviceId` (printed in the boot log
+as `physicalkey-device-<12 hex chars from your chip's MAC>`) needs to be added to that
+allow-list before it can register at all, or pairing will fail with a generic "Device
+verification failed" and no further explanation (deliberately generic — see
+`auth/device-allowlist.js`'s comments for why). That's an admin action on Humberto's end,
+not something you can do yourself against the hosted service.
 
 ## Next real steps, in order
 
-1. **Pair all 3 boards with phones** (each needs it — the encryption migration reset
-   every board's identity and bond). Use a second real phone for at least one board,
-   treating it as an independent real user, to actually exercise the
-   single-bond-per-board rejection rather than just trust the code review.
+1. **Board `...0684c`'s first-ever pairing is confirmed working end-to-end (2026-08-12)** —
+   passkey pairing → device signs the backend's challenge → ratchet check → real git
+   credentials issued, verified live via the on-device log. The other two boards
+   (`...03c9c`, `...00800`) needed re-pairing after the same encryption migration reset
+   their bonds — not yet reconfirmed since; don't assume they're paired without checking.
+2. **A second, independent phone rejecting a board it was never paired to** — a deliberate
+   later test (per Humberto), not an open bug. The single-bond-per-board rejection is
+   verified by code review; actually exercising it with two real phones against the same
+   board is still open.
