@@ -21,19 +21,24 @@ to PK — dropped, don't chase it.
   passkey pairing → device signs → backend-verified ratchet → `.authenticated` → real
   git credentials issued — confirmed live via on-device log screenshot. This closed the
   one open item from the 2026-08-07/09 session.
-- **Board `...03c9c` found running stale pre-security-fix firmware, reflashed, re-paired,
-  confirmed (2026-08-13).** Boot log showed firmware from commit `5ec8add` (2026-08-06) —
-  one commit *before* `42496c5` added BLE MITM passkey pairing (2026-08-07). That's why no
-  PIN was asked on first reconnect attempt: this board was still on plain Just-Works
-  pairing, a real security gap. Reflashed with `idf.py encrypted-flash` (identity survived
-  — NVS wasn't touched), generated a fresh passkey, Humberto forgot the stale iOS bond and
-  re-paired. Confirmed independently via backend data, not just his report: device's
-  `last_seen` jumped to the exact moment of the retry, access_count incremented, no
-  signature-error events anywhere nearby. **Implication: don't assume any board is running
+- **All 3 boards now confirmed on current firmware and paired (2026-08-13).** `...03c9c`
+  and `...00800` were BOTH found running stale pre-security-fix firmware (`5ec8add`
+  2026-08-06 and `8807b67` 2026-08-05 respectively — both before `42496c5` added BLE MITM
+  passkey pairing on 2026-08-07). That's why no PIN was asked on first reconnect: plain
+  Just-Works pairing, a real security gap on 2 of 3 real boards. Both reflashed with
+  `idf.py encrypted-flash` (identities survived — NVS untouched), fresh passkeys
+  generated, Humberto forgot the stale iOS bonds and re-paired. Both confirmed
+  independently via backend data (`last_seen`/`access_count` moved at the exact retry
+  moment, no signature-error events nearby), not just his reports.
+  **`...00800`'s flash failed mid-write once first** ("chip stopped responding" — a
+  transient connection issue, not a code problem) and boot-looped (`SW_RESET` repeating,
+  no app ever starting) — recovered cleanly with a second `encrypted-flash` attempt. Same
+  recoverable pattern as the documented `flash`-vs-`encrypted-flash` boot-loop, different
+  cause; if a flash ever fails partway through, don't panic, just retry `encrypted-flash`
+  after confirming the chip still responds to `esptool.py read_mac`.
+  **Implication for the open-hardware/manufacturing plan: don't assume a board is running
   current firmware just because it boots and has an identity — check the boot log's `App
   version` against `git log` before trusting it, especially before shipping one to anyone.**
-  Board `...00800` ("the spare board") has NOT been checked this way yet — same risk
-  applies, don't assume.
 - **Landing page checkout fixed (2026-08-12).** `physicalkey-landing/index.html`'s
   `API_BASE` was a dead placeholder; now points at the real Railway backend. Committed,
   pushed, deployed, confirmed live.
@@ -78,9 +83,7 @@ hardware design so the community can build/verify/improve it too, pre-order laun
 — *after* a small self-built batch is proven, not before. `hardware/README.md`'s "Building
 it yourself" section is now a real guide for this (BOM callout still needs Humberto's
 actual sourcing link — flagged as a TODO in the file itself). **Still open:** the exact
-Alibaba listing/part number, and board `...00800` — not yet checked for stale firmware or
-re-paired since the encryption migration (see the `...03c9c` finding above; check its boot
-log's `App version` before assuming anything about it).
+Alibaba listing/part number.
 
 ## ⚪ Not started — real scope, not a quick task
 
