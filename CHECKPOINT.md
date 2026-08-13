@@ -66,6 +66,15 @@ to PK — dropped, don't chase it.
 
 ## ✅ Also confirmed, don't re-verify (added after the priority reset above)
 
+- **License split done (2026-08-13).** `hardware/` (firmware, schematics, BOM) is MIT —
+  fully open, build/sell your own boards, no restriction. Everything else (backend,
+  mobile app) moved from plain MIT to Business Source License 1.1 — free to self-host
+  for your own use, blocked from being resold as a competing hosted service, converts
+  to Apache 2.0 on 2030-08-13. Pushed to `main`. **Not lawyer-reviewed** — this uses the
+  standard, widely-adopted BUSL 1.1 template (same one Sentry/CockroachDB use) with one
+  customized clause (the "Additional Use Grant"); fine for now, but worth a real lawyer's
+  eyes before it matters for an actual dispute or funding round.
+
 - **Honeypot forensics no longer reports our own traffic as attacker data (2026-08-13).**
   `/admin/forensics` now excludes known-internal IPs by default — our own dev IP
   (`KNOWN_INTERNAL_IPS` env var on Railway) and the CGNAT range `100.64.0.0/10`
