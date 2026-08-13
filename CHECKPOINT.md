@@ -64,13 +64,20 @@ to PK — dropped, don't chase it.
   approval landing first.
 - **Third-party security audit** — roadmapped Oct 2026, nothing scheduled.
 
-## 🔵 No dependency, pick up anytime
+## ✅ Also confirmed, don't re-verify (added after the priority reset above)
 
-- Honeypot forensics data (372 attempts, 13 "attacker" IPs as of 2026-08-12) is
-  overwhelmingly our own dev/CI traffic, confirmed by matching IPs to this machine's own
-  public IP and to CGNAT/internal ranges. Real external attacker data essentially
-  doesn't exist yet. Could tag known dev IPs now so future reports are trustworthy the
-  moment real traffic shows up — doesn't block anything else.
+- **Honeypot forensics no longer reports our own traffic as attacker data (2026-08-13).**
+  `/admin/forensics` now excludes known-internal IPs by default — our own dev IP
+  (`KNOWN_INTERNAL_IPS` env var on Railway) and the CGNAT range `100.64.0.0/10`
+  (structurally can't be a real internet attacker's source IP). `summary.internalIPs`
+  shows the excluded count; `?includeInternal=true` still surfaces everything for
+  debugging. Verified live on production: went from 13 "attacker" IPs to 2 real
+  unconfirmed ones (`152.233.76.10`, `166.198.252.53` — left in, not confident enough
+  they're also us to hardcode them out). 2 new tests, 129/129 passing. **Note:** getting
+  this live required `railway up` from `backend/`, not just `railway variables --set` —
+  the latter only restarts the existing image with new env vars, it does NOT rebuild
+  from the latest git push. Remember this next time a code change needs to reach
+  production.
 
 ## Known, deliberately deferred (not gaps — don't re-propose these)
 
