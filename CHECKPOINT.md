@@ -55,12 +55,11 @@ to PK — dropped, don't chase it.
    review is pending, not an error. Nothing actionable until Apple responds (approval,
    rejection, or a reviewer question) — don't re-check obsessively, just check back when
    there's a reason to (email notification, or after ~48h).
-2. **Confirm the 2 "unconfirmed attacker" honeypot IPs are really Humberto's own test
-   traffic** before adding them to `KNOWN_INTERNAL_IPS` — asked directly 2026-08-14, not
-   yet answered. See the forensics section below for the evidence (device-ID naming
-   match + 100% successful status codes). Don't add them to the env var without his
-   confirmation; don't re-ask repeatedly either, just pick it up next time forensics
-   comes up.
+2. ~~Confirm the 2 "unconfirmed attacker" honeypot IPs~~ — **done 2026-08-14.** Humberto
+   confirmed. `KNOWN_INTERNAL_IPS` on Railway is now
+   `73.118.250.122,152.233.76.10,166.198.252.53`. Verified live: `/admin/forensics` now
+   reports `internalIPs: 13` out of `13` unique IPs ever logged — zero external
+   attackers currently, honestly. No open items remain from this session's pentest.
 
 ## ✅ Live penetration test of production + fixes, real results (2026-08-14)
 
