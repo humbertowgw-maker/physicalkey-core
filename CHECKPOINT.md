@@ -47,7 +47,7 @@ to PK — dropped, don't chase it.
   session I wrongly implied this was missing — corrected after checking Xcode's account
   data directly. Don't re-raise this as a blocker.)
 
-## 🔴 Blocked on Apple — nothing to do but wait
+## 🔴 Blocked on Apple / Humberto
 
 1. **Beta App Review is in progress for build 1.0 (1).** Submitted 2026-08-13/14 (see
    below for full detail). Typical turnaround 24–48h. Individual tester
@@ -55,6 +55,63 @@ to PK — dropped, don't chase it.
    review is pending, not an error. Nothing actionable until Apple responds (approval,
    rejection, or a reviewer question) — don't re-check obsessively, just check back when
    there's a reason to (email notification, or after ~48h).
+2. **Confirm the 2 "unconfirmed attacker" honeypot IPs are really Humberto's own test
+   traffic** before adding them to `KNOWN_INTERNAL_IPS` — asked directly 2026-08-14, not
+   yet answered. See the forensics section below for the evidence (device-ID naming
+   match + 100% successful status codes). Don't add them to the env var without his
+   confirmation; don't re-ask repeatedly either, just pick it up next time forensics
+   comes up.
+
+## ✅ Live penetration test of production + fixes, real results (2026-08-14)
+
+Ran an authorized, read-only/non-destructive security assessment directly against
+`physicalkey-core-production.up.railway.app` — live probing plus read-only prod DB/log
+inspection via `railway ssh` (not code review alone). Full writeup with evidence is in
+the two artifacts published this session (security assessment + market/competitive
+report) — ask if the links are needed again, they're not duplicated here.
+
+**One real finding, fixed and deployed same day:** `POST /auth/phone/challenge` only
+checked `phoneAttestation` for truthiness — a bare string passed and still got a real
+challenge minted into the in-memory `activeChallenges` map, which was previously *only*
+cleaned up lazily (on a matching `/verify` call that garbage input will never trigger).
+Fixed in `backend/server.js`: the endpoint now validates `phoneAttestation` is an object
+with real `platform`/`deviceId` strings before storing anything, and a `setInterval`
+sweep (every 60s) now actively prunes expired challenge entries regardless of whether
+verify was ever called. Also fixed while in there: malformed JSON bodies now return 400
+(`Invalid JSON body`) instead of a generic 500 — cosmetic, no info leak, but wrong status
+code. **3 new tests added** (`backend/test/crypto-flow.test.js`), **132/132 passing**.
+Deployed via `railway up`, confirmed live against production with real curl requests
+(not just local tests) — both fixes verified working on the actual prod URL.
+
+**Everything else tested came back clean, confirmed live not assumed:** Helmet security
+headers, TLS 1.3, all 3 admin endpoints correctly reject unauthenticated calls, JWT
+forgery (`alg:none`, garbage, empty bearer) all rejected, no exposed `.env`/`.git`/db
+file over HTTP, honeypot git-http-backend path traversal is **not exploitable** (encoded
+attempt reached the app and was cleanly rejected by git's own dispatch table — confirmed
+via prod logs; raw attempt never reached the app at all, blocked at Railway's edge
+layer), no permissive CORS, `npm audit` = 0 vulnerabilities, `/auth/repair/challenge`
+properly requires real pre-existing paired identities (not exploitable the same way as
+phone/challenge).
+
+**Real end-to-end test results, all suites re-run live today (not carried forward from
+memory):**
+- Backend: 132/132 (129 + 3 new from the fixes above)
+- iOS (`xcodebuild test` on iPhone 17 Pro Simulator): 20/20, zero failures
+- Firmware host-tests (native compile, no board needed): all passed, including the
+  X25519 ratchet derivation, continuity-across-sessions, and weak-key-rejection checks
+
+**Honeypot forensics re-examined with real data (not the earlier "unconfirmed" framing):**
+all 13 IPs ever logged reviewed directly against the prod DB via `railway ssh`. 11 were
+already correctly internal (CGNAT + configured dev IP). The 2 previously-"unconfirmed"
+IPs (`152.233.76.10`, `166.198.252.53`) are almost certainly Humberto's own test-script
+traffic, not real attackers: every logged event for both is `statusCode: 200`
+(successful, not failed/malicious), and one event for `152.233.76.10` carries
+`deviceId: "git-test-device-2dj3st"` — the exact naming convention
+`scripts/test-git-forensics.js` generates. **Net conclusion: zero confirmed real external
+attacker traffic exists in the honeypot as of today.** Phase 2's "collect attacker
+techniques / publish forensics" has nothing real to write up yet — that's an honest
+status, not a gap to manufacture data for. Revisit once the honeypot logs something with
+failed/malformed requests instead of clean 200s.
 
 ## ✅ TestFlight build submitted for Beta App Review (2026-08-13/14)
 
