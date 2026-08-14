@@ -6,11 +6,8 @@
   Xcode's already-authenticated session auto-registers the App ID and fetches a real
   App Store distribution profile, no manual cert/profile setup needed.
 
-  Do NOT add `<key>destination</key><string>upload</string>` until an App Store
-  Connect app record for com.physicalkey.app actually exists (My Apps -> + -> New
-  App at appstoreconnect.apple.com) — confirmed by testing: it fails with
-  `IDEDistributionFetchAppRecordStep: missingApp(bundleId: "com.physicalkey.app")`,
-  not a signing/provisioning problem. See TESTFLIGHT.md step 1.
+  App Store Connect app record for com.physicalkey.app created 2026-08-13 (SKU
+  physicalkey-ios-001) — the upload destination below is now unblocked.
 -->
 <plist version="1.0">
 <dict>
@@ -20,5 +17,7 @@
     <string>9RYL8ZRC3U</string>
     <key>signingStyle</key>
     <string>automatic</string>
+    <key>destination</key>
+    <string>upload</string>
 </dict>
 </plist>

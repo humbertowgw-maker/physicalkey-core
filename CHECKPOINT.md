@@ -5,7 +5,7 @@ this file is just "what's true right now" so nothing gets re-litigated or re-run
 accident. Update this whenever status changes; keep old detail in `SETUP_COMPLETE.md`,
 not here.
 
-**Last updated:** 2026-08-12
+**Last updated:** 2026-08-14
 
 **Priority call from Humberto (2026-08-12): Stripe/checkout is now the LAST step, not
 the next one — focus on finishing the actual product first.** A DNS ENOTFOUND report
@@ -47,24 +47,72 @@ to PK — dropped, don't chase it.
   session I wrongly implied this was missing — corrected after checking Xcode's account
   data directly. Don't re-raise this as a blocker.)
 
-## 🔴 Blocked on Humberto — can't proceed without this
+## 🔴 Blocked on Apple — nothing to do but wait
 
-1. **Create the App Store Connect app record.** Confirmed conclusively 2026-08-13, not
-   inferred: a real archive → automatic-signing → export → upload attempt failed with
-   `IDEDistributionFetchAppRecordStep: missingApp(bundleId: "com.physicalkey.app")` — no
-   app record exists at appstoreconnect.apple.com for PhysicalKey. Needs a real login with
-   2FA (My Apps → + → New App, bundle ID `com.physicalkey.app`) — I can't do this part.
-   See `mobile/ios/TESTFLIGHT.md` step 1. This is the one remaining blocker to "finish PK."
+1. **Beta App Review is in progress for build 1.0 (1).** Submitted 2026-08-13/14 (see
+   below for full detail). Typical turnaround 24–48h. Individual tester
+   `achilleszepeda@icloud.com` currently shows "No Builds Available" — expected while
+   review is pending, not an error. Nothing actionable until Apple responds (approval,
+   rejection, or a reviewer question) — don't re-check obsessively, just check back when
+   there's a reason to (email notification, or after ~48h).
 
-## ✅ Everything else about TestFlight submission is proven working (2026-08-13)
+## ✅ TestFlight build submitted for Beta App Review (2026-08-13/14)
 
-Archive, automatic App ID registration, and App Store distribution provisioning all work
-non-interactively via `mobile/ios/ExportOptions.plist` +
-`xcodebuild -exportArchive -allowProvisioningUpdates` — Xcode's already-authenticated
-session (team `9RYL8ZRC3U`) handles all of it, no manual cert/profile work needed. Once
-the app record above exists, add `destination: upload` to `ExportOptions.plist` and
-re-run — see `mobile/ios/TESTFLIGHT.md` for the exact commands. Nothing left to
-rediscover.
+**Export compliance answered.** "Standard encryption algorithms instead of, or in
+addition to, using or accessing the encryption within Apple's operating system" — correct
+per the app's actual crypto (P-256 ECDSA via Secure Enclave, X25519 + HMAC-SHA512 ratchet
+— all standard/published algorithms, not proprietary, and implemented beyond just calling
+iOS's built-in HTTPS). France distribution question: Humberto answered directly in the
+UI, not captured here — check App Store Connect if it matters later.
+
+**Individual tester added → this became an External Testing / Beta App Review flow.**
+Using "Add New Testers" (email-invite) rather than adding an org team member triggers
+Apple's Beta App Review, not just internal-testing (which would've skipped review
+entirely — worth remembering for future builds where a fast internal-only loop is
+wanted: add testers as App Store Connect team members via Users and Access instead).
+
+**Real blocker surfaced and solved: no username/password exists for PhysicalKey.** Auth
+is Face ID + BLE pairing with a physical ESP32 key, not a traditional login, so the
+review form's "Sign-in required" checkbox was unchecked and the Beta App Description
+instead explains the hardware requirement and offers a live demo / loaner device via
+contact info (Humberto Zepeda, `achilleszepeda@icloud.com`, phone on file in the
+submission — not duplicated here). **If Apple's review bounces asking for sign-in
+credentials or hardware access, that's the open question to resolve — offering a demo
+call is the fallback, not yet tested against a real reviewer response.**
+
+Submitted via the "Submit for Review" button in App Store Connect → TestFlight → iOS
+Builds → 1.0 (1); confirmed via the "Remove from Review" button now showing in place of
+"Submit for Review" plus a success banner.
+
+## ✅ TestFlight build uploaded — first submission done (2026-08-13)
+
+**App Store Connect app record created.** Humberto logged in (2FA), I filled the New App
+form and he picked User Access: iOS, name "PhysicalKey", English (U.S.), bundle ID
+`com.physicalkey.app` (was already registered from earlier archive attempts), SKU
+`physicalkey-ios-001`, Full Access. This unblocked everything downstream.
+
+**Archived, exported, and uploaded end-to-end, same session:**
+```bash
+xcodebuild -project PhysicalKey.xcodeproj -scheme PhysicalKey -sdk iphoneos \
+  -configuration Release -destination "generic/platform=iOS" \
+  -archivePath build/PhysicalKey.xcarchive -allowProvisioningUpdates archive
+# ** ARCHIVE SUCCEEDED **
+
+xcodebuild -exportArchive -archivePath build/PhysicalKey.xcarchive \
+  -exportPath build/export -exportOptionsPlist ExportOptions.plist \
+  -allowProvisioningUpdates
+# Upload succeeded. Uploaded PhysicalKey. ** EXPORT SUCCEEDED **
+```
+`mobile/ios/ExportOptions.plist` now has `destination: upload` (added once the app
+record existed — previously deliberately left out, see file's own comment history).
+Archive signed automatically with team `9RYL8ZRC3U`'s development identity; export
+re-signed with App Store distribution profile, all non-interactive via
+`-allowProvisioningUpdates`. Nothing left to rediscover about this path — it's proven,
+reusable for every future build: bump the version/build number in Xcode, re-run both
+commands.
+
+Apple's server-side processing typically takes 15–60 min after upload before the build
+shows up under TestFlight and is assignable to testers.
 
 ## ⏸ Deprioritized to last, by explicit instruction (2026-08-12) — don't chase
 

@@ -158,3 +158,34 @@ test('trust-on-first-use: hijacking an already-registered deviceId with a differ
   const legit = await authAs(originalDevice, false);
   assert.equal(legit.status, 200, 'the original key must still work after a hijack attempt');
 });
+
+test('phone/challenge rejects a non-object phoneAttestation instead of minting a challenge for it', async () => {
+  const res = await fetch(`${server.baseUrl}/auth/phone/challenge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phoneAttestation: 'just a string, not a real attestation' })
+  });
+  assert.equal(res.status, 400, 'a truthy non-object attestation must be rejected, not silently accepted');
+  const body = await res.json();
+  assert.match(body.error, /platform and deviceId/);
+});
+
+test('phone/challenge rejects an attestation object missing platform/deviceId', async () => {
+  const res = await fetch(`${server.baseUrl}/auth/phone/challenge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ phoneAttestation: { foo: 'bar' } })
+  });
+  assert.equal(res.status, 400);
+});
+
+test('malformed JSON body returns 400, not a generic 500', async () => {
+  const res = await fetch(`${server.baseUrl}/auth/phone/challenge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: 'not valid json{{{'
+  });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.equal(body.error, 'Invalid JSON body');
+});

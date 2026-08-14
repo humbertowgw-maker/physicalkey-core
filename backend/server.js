@@ -47,6 +47,22 @@ const SECRET_KEY = process.env.SECRET_KEY || 'dev-secret-key';
 const ADMIN_DEVICE_ID = process.env.ADMIN_DEVICE_ID;
 const activeChallenges = new Map();
 
+// activeChallenges entries are otherwise only removed lazily, when a matching /verify
+// call arrives for that exact challengeId — a challenge that's never followed up on
+// (e.g. minted by a caller just probing the endpoint) sits here forever. This sweep is
+// the active half of cleanup: independent of whether anyone ever calls verify, prune
+// anything past its own expiresAt. Found via live penetration testing 2026-08-14 — a
+// distributed/patient caller isn't slowed by the per-IP rate limit (see its comment
+// below), so without this a sustained low-and-slow caller could grow this map
+// unboundedly.
+const CHALLENGE_SWEEP_INTERVAL_MS = 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, entry] of activeChallenges) {
+    if (now > entry.expiresAt) activeChallenges.delete(id);
+  }
+}, CHALLENGE_SWEEP_INTERVAL_MS).unref();
+
 // Trust proxy is deliberately a small bounded number here, NOT `true` — express-rate-limit
 // hard-rejects (throws on every request) an unbounded "trust the whole chain" setting,
 // since that would let a client bypass per-IP rate limiting by prepending fake
@@ -70,6 +86,18 @@ app.use(express.json({
     if (req.originalUrl === '/billing/webhook') req.rawBody = buf;
   }
 }));
+// express.json() throws a SyntaxError (via body-parser) on unparseable JSON, which
+// Express's default error handler turned into a generic 500 — technically correct
+// (nothing crashed) but the wrong status code for "the client sent bad input," and
+// inconsistent with the clean 400s every other bad-input path in this file returns.
+// Must be registered immediately after express.json() so it only catches parse errors
+// from that middleware, not unrelated errors from routes registered later.
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && 'body' in err) {
+    return res.status(400).json({ error: 'Invalid JSON body' });
+  }
+  next(err);
+});
 // Skipped only when NODE_ENV=test — a single test file exercising a full org (create,
 // add several members, claim a device, grant/revoke access, multiple auth flows) easily
 // exceeds this within one server instance's lifetime, which has nothing to do with what
@@ -192,6 +220,15 @@ app.post('/auth/phone/challenge', authRateLimit, honeypotLogger, (req, res) => {
     if (!phoneAttestation) {
       activateHoneypot(getClientIp(req), 'No phone attestation provided');
       return res.status(400).json({ error: 'Phone attestation required' });
+    }
+    // Only a truthiness check happened above — a bare string or number passed the old
+    // check and still got a real challenge minted and stored. validatePhoneAttestation()
+    // (called at /verify) requires platform + deviceId to be real strings anyway, so
+    // reject the same shape here, before allocating any server-side state for it.
+    if (typeof phoneAttestation !== 'object' || Array.isArray(phoneAttestation)
+      || typeof phoneAttestation.platform !== 'string' || typeof phoneAttestation.deviceId !== 'string') {
+      activateHoneypot(getClientIp(req), 'Malformed phone attestation', { received: typeof phoneAttestation });
+      return res.status(400).json({ error: 'phoneAttestation must include platform and deviceId strings' });
     }
 
     const challenge = crypto.randomBytes(32).toString('base64');
