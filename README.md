@@ -115,11 +115,13 @@ Threat model highlights:
 - Micro USB cable
 - Mac with Xcode 15+
 
-### For Users (Planned TestFlight Beta)
+### For Users (TestFlight Beta)
 
-TestFlight distribution is not available yet. The current iOS app is installed
-directly from Xcode on a trusted development device. Follow the
-[PhysicalKey website](https://physicalkey.whitegwireless.com) for future beta access.
+The iOS app is submitted to Apple for Beta App Review as of 2026-08-14. Once approved,
+it'll be installable via TestFlight without building from source. Until then, the app
+can be built and run directly from Xcode on a trusted development device. Follow the
+[PhysicalKey website](https://physicalkey.whitegwireless.com) for beta access once it
+opens.
 
 ### For Developers (Self-Hosted)
 
@@ -231,14 +233,28 @@ See [SETUP_COMPLETE.md](./SETUP_COMPLETE.md) for the current setup and validatio
 
 ## Testing
 
-Run the backend test suite:
+Every layer has real tests against real code — no placeholders:
 
 ```bash
-cd backend
-npm test
+# Backend (Node's built-in test runner)
+cd backend && npm test                          # 132/132 passing
+
+# iOS (real xcodebuild test run, no mocked crypto)
+cd mobile/ios && xcodebuild test -project PhysicalKey.xcodeproj \
+  -scheme PhysicalKey -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
+                                                  # 20/20 passing
+
+# Firmware ratchet math (native compile, no board or simulator needed)
+cd hardware/firmware-idf/PhysicalKeyDevice/host-tests && ./run.sh
+                                                  # all passing
 ```
 
-The beta release includes 127 automated tests.
+The backend has also been through a live, authorized penetration test against
+production (2026-08-14) — one medium-severity finding (a challenge-minting endpoint
+with weak input validation and no active cleanup), fixed and deployed the same day.
+Everything else tested clean: security headers, TLS, admin-endpoint auth, JWT forgery
+resistance, honeypot path-traversal resistance, and dependency audit. Full findings
+available on request.
 
 ## Reporting Security Issues
 
@@ -276,7 +292,7 @@ verification). The backend and app are the actual commercial product.
 
 - [Website](https://physicalkey.whitegwireless.com)
 - Documentation: coming soon
-- TestFlight: coming soon
+- TestFlight: in Beta App Review as of 2026-08-14, link coming once approved
 
 ---
 
