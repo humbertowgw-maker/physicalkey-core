@@ -62,6 +62,39 @@ to PK — dropped, don't chase it.
    reports `internalIPs: 13` out of `13` unique IPs ever logged — zero external
    attackers currently, honestly. No open items remain from this session's pentest.
 
+## ✅ Extended static review — iOS, firmware, backend authz (2026-08-14, second pass)
+
+Requested explicitly after the live pentest above, to close the gaps that HTTP probing
+alone can't reach. Read the actual source, not just what a curl request can see —
+security assessment artifact updated with the full writeup.
+
+**Clean:** iOS certificate pinning is real (validates full chain, then pins the issuing
+intermediate — deliberately not leaf/root, a documented reproduced edge case around cert
+substitution; checks every cert in the chain). Secure Enclave key access control is
+correct (`biometryCurrentSet` + `privateKeyUsage`, device-only). Session tokens never
+persisted client-side. Firmware private key traced through every use site — only ever
+feeds `Ed25519::sign()`, never transmitted. Flash + NVS encryption actually enforced in
+`sdkconfig` (`CONFIG_SECURE_FLASH_ENC_ENABLED=y`, `CONFIG_NVS_ENCRYPTION=y`), not just
+documented intent. JWT algorithm explicitly pinned to HS256 everywhere (no algorithm-
+confusion surface). No IDOR in org-scoped endpoints — `phoneDeviceId` derives strictly
+from the verified JWT, every org route checks membership against the specific `:orgId`
+in the URL. BLE pairing passkey uses real hardware RNG.
+
+**One low finding, already implicitly known:** `CONFIG_SECURE_BOOT is not set` — flash/
+NVS encryption protects the private key at rest, but without Secure Boot, physical
+possession of a board could allow flashing modified firmware. This is a direct,
+quantified instance of the README's already-unchecked roadmap item ("device-side
+hardware tamper detection"), not a new surprise.
+
+**Still genuinely out of reach in this environment** — real limitations, not skipped
+work: live BLE radio-layer testing (sniffing/relay/downgrade — needs physical hardware
++ RF tooling), iOS binary reverse engineering (needs a jailbroken device). The
+admin-device live production auth test was considered and ruled out as uninformative:
+the real production admin private key (`admin-phone-prod`) isn't stored on this
+machine — correctly, it should only ever live in the phone's Secure Enclave — and
+testing with a mismatched local key would only re-confirm what the existing
+hijack-protection test suite (`crypto-flow.test.js`) already covers.
+
 ## ✅ Live penetration test of production + fixes, real results (2026-08-14)
 
 Ran an authorized, read-only/non-destructive security assessment directly against
