@@ -1,3 +1,8 @@
 build/
 managed_components/
 dependencies.lock
+secure_boot_signing_key/
+# Secure Boot V1 signing key -- NEVER commit. Losing this means the board can
+# never be re-flashed again once Secure Boot is burned in; back it up somewhere
+# durable and offline, outside this repo entirely.
+sdkconfig.pre-secure-boot.bak
