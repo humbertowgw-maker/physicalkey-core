@@ -13,8 +13,8 @@ the real `identities` table) — not from memory or narrative docs.
 
 | Nickname | Full device ID | Passkey | Registered | Last seen | Access count | Secure Boot / Release flash enc. |
 |---|---|---|---|---|---|---|
-| `...00800` | `physicalkey-device-680947e00800` | **unknown — not recorded** | 2026-08-05 | 2026-08-13 | 14 | Not yet — still on Development-mode flash encryption, no Secure Boot |
-| `...03c9c` | `physicalkey-device-680947e03c9c` | **unknown — not recorded** | 2026-08-04 | 2026-08-13 | 24 | Not yet — same as above |
+| `...00800` | `physicalkey-device-680947e00800` | `853203` | 2026-08-05 | 2026-08-13 | 14 | Not yet — still on Development-mode flash encryption, no Secure Boot |
+| `...03c9c` | `physicalkey-device-680947e03c9c` | `717621` | 2026-08-04 | 2026-08-13 | 24 | Not yet — same as above |
 | `...0684c` | `physicalkey-device-680947e0684c` | `969735` | 2026-08-10 | 2026-08-12 | 5 | Not yet — same as above |
 
 All three: `status: active`, `recovery_policy: self-service`, currently running
@@ -24,21 +24,16 @@ change). None have had the new Secure Boot + Release-mode-flash-encryption build
 flashed yet — that build exists (`build/PhysicalKeyDevice.bin`, signed) but hasn't
 touched real hardware.
 
-## Known gap: 2 of 3 passkeys were never recorded
+## Passkeys — resolved 2026-08-15
 
-`...03c9c` and `...00800` both got fresh BLE pairing passkeys generated when they were
-reflashed with `idf.py encrypted-flash` on 2026-08-13 (see CHECKPOINT.md). The firmware
-prints the passkey once, loudly, to the serial console on first boot after a passkey
-reset — and by design there's no way to retrieve it later (no admin endpoint, no log).
-Neither value was captured into a file at the time. Practically, this means: if either
-board's iOS bond is ever lost (app reinstall, new phone, etc.), re-pairing will fail
-until someone re-flashes that board's passkey NVS entry and captures the new value here
-immediately, on the same serial session, before closing the terminal.
-
-**Action needed from Humberto:** check whether these two passkeys are physically written
-on the board enclosures/labels themselves (the firmware's own guidance is "write this on
-the unit before shipping") — if so, transcribe them into this table. If not written down
-anywhere, that's real, current exposure to the failure mode above.
+All three boards are physically labeled with their device ID and passkey, confirmed by
+Humberto directly (not inferred). The gap noted earlier was only that the *digital*
+registry didn't have them, not that the passkeys were actually lost — `...03c9c`
+(`717621`) and `...00800` (`853203`) were read off the physical labels and are now
+recorded above alongside `...0684c` (`969735`). Keep this table as the durable digital
+backup going forward — a label on a board isn't searchable or backed up the way this
+file is, so if a board ever gets relabeled or a passkey regenerated, update here in the
+same session, not "later."
 
 ## Secure Boot / Release-mode rollout plan
 
