@@ -50,11 +50,12 @@ to PK — dropped, don't chase it.
 ## 🔴 Blocked on Apple / Humberto
 
 1. **Beta App Review is in progress for build 1.0 (1).** Submitted 2026-08-13/14 (see
-   below for full detail). Typical turnaround 24–48h. Individual tester
-   `achilleszepeda@icloud.com` currently shows "No Builds Available" — expected while
-   review is pending, not an error. Nothing actionable until Apple responds (approval,
-   rejection, or a reviewer question) — don't re-check obsessively, just check back when
-   there's a reason to (email notification, or after ~48h).
+   below for full detail). Status confirmed live in App Store Connect on 2026-08-14:
+   **"Waiting for Review"**, expires in 90 days if untouched. Typical turnaround
+   24–48h from submission for a first build, sometimes longer. Nothing actionable
+   until Apple responds (approval, rejection, or a reviewer question) — don't
+   re-check obsessively, just check back when there's a reason to (email
+   notification, or after ~48h).
 2. ~~Confirm the 2 "unconfirmed attacker" honeypot IPs~~ — **done 2026-08-14.** Humberto
    confirmed. `KNOWN_INTERNAL_IPS` on Railway is now
    `73.118.250.122,152.233.76.10,166.198.252.53`. Verified live: `/admin/forensics` now
