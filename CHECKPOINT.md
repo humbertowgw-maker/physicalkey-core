@@ -56,6 +56,10 @@ to PK — dropped, don't chase it.
    until Apple responds (approval, rejection, or a reviewer question) — don't
    re-check obsessively, just check back when there's a reason to (email
    notification, or after ~48h).
+   **Re-confirmed by Humberto 2026-08-16: still "Waiting for Review."** Now past the
+   typical 24–48h window but within the documented "sometimes longer" range — not yet
+   a reason to treat this as stuck. Still nothing actionable; don't propose re-checking
+   again without a real trigger (email notification, or a longer gap than this one).
 2. ~~Confirm the 2 "unconfirmed attacker" honeypot IPs~~ — **done 2026-08-14.** Humberto
    confirmed. `KNOWN_INTERNAL_IPS` on Railway is now
    `73.118.250.122,152.233.76.10,166.198.252.53`. Verified live: `/admin/forensics` now
