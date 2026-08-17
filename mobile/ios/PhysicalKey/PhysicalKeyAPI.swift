@@ -135,6 +135,10 @@ struct PhysicalKeyAPI {
         try await get("/orgs/\(orgId)", bearer: phoneSessionToken)
     }
 
+    func listOrgs(phoneSessionToken: String) async throws -> [Organization] {
+        try await get("/orgs", bearer: phoneSessionToken)
+    }
+
     @discardableResult
     func addMember(orgId: String, deviceId: String, role: String?, phoneSessionToken: String) async throws -> OrgMember {
         var body: [String: Any] = ["deviceId": deviceId]

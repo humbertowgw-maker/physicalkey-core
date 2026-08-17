@@ -17,7 +17,7 @@ import { logAdminAction, getAdminActionLog, getOrgActionLog, verifyAuditChain } 
 import { isValidRatchetStatus, recordRatchetStatus, getRatchetState, clearRatchetState, verifyAndRecordRatchetAttestation } from './auth/ratchet.js';
 import {
   createOrganization, getOrganization, getMembership, listMembers, addMember, removeMember,
-  getDeviceOrg, listOrgDevices, addDeviceToOrg, removeDeviceFromOrg,
+  listOrgs, getDeviceOrg, listOrgDevices, addDeviceToOrg, removeDeviceFromOrg,
   listDeviceAccess, grantDeviceAccess, revokeDeviceAccess, isAuthorizedForDevice
 } from './auth/organizations.js';
 import { isEnforced as isAllowlistEnforced, addToAllowlist, removeFromAllowlist, listAllowlist } from './auth/device-allowlist.js';
@@ -684,6 +684,13 @@ app.delete('/orgs/:orgId/devices/:deviceId/access/:memberDeviceId', requirePhone
   revokeDeviceAccess(req.params.orgId, req.params.deviceId, req.params.memberDeviceId);
   logAdminAction(req.phoneDeviceId, 'device_access_revoked', req.params.deviceId, { memberDeviceId: req.params.memberDeviceId }, req.params.orgId);
   res.json({ status: 'revoked' });
+});
+
+// List all orgs this phone is a member of (discovery endpoint).
+// Phone-only session is sufficient since org membership is the only gate.
+app.get('/orgs', requirePhoneSession, (req, res) => {
+  const orgs = listOrgs(req.phoneDeviceId).map((o) => getOrganization(o.org_id));
+  res.json({ orgs });
 });
 
 // Org-scoped view of the same admin_actions log /admin/audit-log exposes globally — lets

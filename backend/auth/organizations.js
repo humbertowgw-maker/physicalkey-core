@@ -54,6 +54,10 @@ export function getMembership(orgId, deviceId) {
   return getMemberStmt.get(orgId, deviceId) ?? null;
 }
 
+export function listOrgs(deviceId) {
+  return db.prepare(`SELECT DISTINCT org_id FROM organization_members WHERE device_id = ?`).all(deviceId);
+}
+
 export function listMembers(orgId) {
   return listMembersStmt.all(orgId);
 }

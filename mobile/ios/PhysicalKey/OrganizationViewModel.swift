@@ -105,6 +105,21 @@ final class OrganizationViewModel: ObservableObject {
         await refresh(orgId: orgId)
     }
 
+    func listOrgs() async {
+        guard let phoneSessionToken = self.phoneSessionToken else { return }
+        do {
+            let orgs = try await api.listOrgs(phoneSessionToken: phoneSessionToken)
+            // Store the first org as the "known" org for convenience,
+            // or you could keep them all in a separate published property.
+            if let firstOrg = orgs.first {
+                self.org = firstOrg
+                UserDefaults.standard.set(firstOrg.id, forKey: Self.orgIdDefaultsKey)
+            }
+        } catch {
+            errorMessage = Self.describe(error)
+        }
+    }
+
     func addMember(deviceId: String, role: String) async {
         guard let orgId = org?.id else { return }
         do {
