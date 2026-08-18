@@ -5,7 +5,31 @@ this file is just "what's true right now" so nothing gets re-litigated or re-run
 accident. Update this whenever status changes; keep old detail in `SETUP_COMPLETE.md`,
 not here.
 
-**Last updated:** 2026-08-14
+**Last updated:** 2026-08-17
+
+**2026-08-17: App Store submission (not just TestFlight) is now actively in progress.**
+Version 1.0 moved to "Prepare for Submission" in App Store Connect. Filled in: build
+(TestFlight Build 1 attached), subtitle, category (Utilities/Business), promotional
+text, description, keywords, App Review notes (correctly explains there's no
+username/password login and that Bluetooth hardware pairing needs physical hardware
+Apple's reviewers don't have), 1 real screenshot (Release-config, exact required
+pixel size), pricing (Free, all 175 territories), Support/Marketing URL (landing
+page's Vercel URL — found and fixed a real blocker along the way: that URL was
+sitting behind Vercel SSO protection, so real visitors got a login wall instead of
+the site; disabled deployment protection on `physicalkey-landing`), copyright
+(placeholder "2026 Humberto Zepeda", confirm the entity name).
+**Still blocking actual submission, needs Humberto specifically:** App Review
+contact info (name/phone/email — personal data, not filled in), a Privacy Policy
+(doesn't exist anywhere yet, hard requirement given Face ID + Bluetooth usage), the
+App Privacy "nutrition label" questionnaire (verified via the real code that
+`PhysicalKeyAPI.swift` transmits no PII — only a local deviceId, public keys,
+signatures — so the honest answer is close to "data not collected," but it's a
+formal declaration, didn't click through it solo), Age Rating questionnaire, Export
+Compliance and Content Rights declarations (both likely straightforward "standard
+encryption exemption" / "no third-party content" but are legal certifications).
+Did NOT click "Add for Review" — full punch list in the artifact from that session.
+`physicalkey.app` domain still isn't registered/pointed anywhere; using the Vercel
+URL as a stopgap.
 
 **Priority call from Humberto (2026-08-12): Stripe/checkout is now the LAST step, not
 the next one — focus on finishing the actual product first.** A DNS ENOTFOUND report
