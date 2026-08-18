@@ -26,13 +26,21 @@ verified against real `PhysicalKeyAPI.swift` behavior (no PII, private keys neve
 transmitted, no analytics), deployed and confirmed live at
 `https://whitegwireless.com/physicalkey-privacy` (real `curl` 200 + content check,
 not assumed), and the URL is saved in App Store Connect's App Privacy section.
-**Still blocking actual submission, needs Humberto specifically:** App Review
-contact info (name/phone/email — personal data, not filled in), Age Rating
-questionnaire, Export Compliance and Content Rights declarations (both likely
-straightforward "standard encryption exemption" / "no third-party content" but are
-legal certifications, didn't click through solo). Did NOT click "Add for Review" —
-full punch list in the artifact from that session. `physicalkey.app` domain still
-isn't registered/pointed anywhere; using the Vercel URL as a stopgap.
+**SUBMITTED same day, confirmed live in App Store Connect.** Age Rating walked
+through all 7 steps together (nothing objectionable in the app — calculated 4+
+across 172 countries). Export Compliance turned out to already be correctly
+declared ("App Uses Non-Exempt Encryption: No") on Build 1 from the original
+8/13 TestFlight upload — checked the actual build metadata rather than assuming,
+nothing to redo. Content Rights ("No, doesn't contain/show/access third-party
+content") confirmed accurate by grepping the app for web views, external
+content loading, and SPM dependencies — found zero of any of it. Humberto filled
+in App Review contact info himself and clicked **Add for Review**. Confirmed via
+App Store Connect's App Review page: iOS 1.0 submission, status **"Ready for
+Review,"** created by Achilles Zepeda. This is now the same "waiting on Apple"
+state as the earlier 2026-08-13/14 TestFlight beta review, but for the real
+public App Store listing this time — nothing actionable until Apple responds.
+`physicalkey.app` domain still isn't registered/pointed anywhere; using the
+Vercel URL as a stopgap.
 
 **Priority call from Humberto (2026-08-12): Stripe/checkout is now the LAST step, not
 the next one — focus on finishing the actual product first.** A DNS ENOTFOUND report
