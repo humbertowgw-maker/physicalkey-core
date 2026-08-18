@@ -18,18 +18,21 @@ page's Vercel URL — found and fixed a real blocker along the way: that URL was
 sitting behind Vercel SSO protection, so real visitors got a login wall instead of
 the site; disabled deployment protection on `physicalkey-landing`), copyright
 (placeholder "2026 Humberto Zepeda", confirm the entity name).
+**Update same day:** Humberto filled in and published the App Privacy "nutrition
+label" himself — "Data Not Collected," matching the code-verified assessment above
+exactly. Privacy Policy is also now live: `pages/physicalkey-privacy.jsx` added to
+`white-glove-landing` (same per-app pattern as `brainos-privacy.jsx`), content
+verified against real `PhysicalKeyAPI.swift` behavior (no PII, private keys never
+transmitted, no analytics), deployed and confirmed live at
+`https://whitegwireless.com/physicalkey-privacy` (real `curl` 200 + content check,
+not assumed), and the URL is saved in App Store Connect's App Privacy section.
 **Still blocking actual submission, needs Humberto specifically:** App Review
-contact info (name/phone/email — personal data, not filled in), a Privacy Policy
-(doesn't exist anywhere yet, hard requirement given Face ID + Bluetooth usage), the
-App Privacy "nutrition label" questionnaire (verified via the real code that
-`PhysicalKeyAPI.swift` transmits no PII — only a local deviceId, public keys,
-signatures — so the honest answer is close to "data not collected," but it's a
-formal declaration, didn't click through it solo), Age Rating questionnaire, Export
-Compliance and Content Rights declarations (both likely straightforward "standard
-encryption exemption" / "no third-party content" but are legal certifications).
-Did NOT click "Add for Review" — full punch list in the artifact from that session.
-`physicalkey.app` domain still isn't registered/pointed anywhere; using the Vercel
-URL as a stopgap.
+contact info (name/phone/email — personal data, not filled in), Age Rating
+questionnaire, Export Compliance and Content Rights declarations (both likely
+straightforward "standard encryption exemption" / "no third-party content" but are
+legal certifications, didn't click through solo). Did NOT click "Add for Review" —
+full punch list in the artifact from that session. `physicalkey.app` domain still
+isn't registered/pointed anywhere; using the Vercel URL as a stopgap.
 
 **Priority call from Humberto (2026-08-12): Stripe/checkout is now the LAST step, not
 the next one — focus on finishing the actual product first.** A DNS ENOTFOUND report
