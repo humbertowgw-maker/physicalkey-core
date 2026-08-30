@@ -13,6 +13,8 @@ import db from '../lib/db.js';
 
 const insertOrgStmt = db.prepare(`INSERT INTO organizations (id, name, owner_device_id, created_at) VALUES (?, ?, ?, ?)`);
 const getOrgStmt = db.prepare(`SELECT * FROM organizations WHERE id = ?`);
+const setPlanStatusStmt = db.prepare(`UPDATE organizations SET plan_status = ? WHERE id = ?`);
+const countOrgDevicesStmt = db.prepare(`SELECT COUNT(*) AS count FROM organization_devices WHERE org_id = ?`);
 
 const upsertMemberStmt = db.prepare(`
   INSERT INTO organization_members (org_id, device_id, role, added_at, status)
@@ -62,10 +64,25 @@ export function listMembers(orgId) {
   return listMembersStmt.all(orgId);
 }
 
-/** Adds a member, or reactivates one that was previously removed. */
+/** Adds a member, or reactivates one that was previously removed. Membership itself is
+ * free and unlimited — sharing access to a device among people you've already added is
+ * the core org feature; see addDeviceToOrg for where the actual paid "Team" boundary is
+ * (managing more than one physical device under one org). */
 export function addMember(orgId, deviceId, role = 'member') {
   upsertMemberStmt.run(orgId, deviceId, role, Date.now());
   return getMembership(orgId, deviceId);
+}
+
+export function getOrgPlanStatus(orgId) {
+  return getOrgStmt.get(orgId)?.plan_status ?? 'none';
+}
+
+export function setOrgPlanStatus(orgId, status) {
+  setPlanStatusStmt.run(status, orgId);
+}
+
+function isTeamPlanActive(orgId) {
+  return getOrgPlanStatus(orgId) === 'active';
 }
 
 /**
@@ -90,11 +107,18 @@ export function listOrgDevices(orgId) {
   return listOrgDevicesStmt.all(orgId);
 }
 
-/** Associates a physical key device with an org. A device can belong to at most one org. */
+/**
+ * Associates a physical key device with an org. A device can belong to at most one org.
+ * A single device is the free shape (matches a single-owner org); a second device is
+ * "Team" — sharing/managing multiple devices under one org — and needs an active plan.
+ */
 export function addDeviceToOrg(orgId, deviceId) {
   const existing = getDeviceOrg(deviceId);
   if (existing) {
     throw new Error(existing.org_id === orgId ? 'Device already belongs to this org' : 'Device already belongs to a different org');
+  }
+  if (countOrgDevicesStmt.get(orgId).count >= 1 && !isTeamPlanActive(orgId)) {
+    throw Object.assign(new Error('Adding another device requires the Team plan — redeem a license code first'), { code: 'PLAN_REQUIRED' });
   }
   insertOrgDeviceStmt.run(deviceId, orgId, Date.now());
   return getDeviceOrg(deviceId);

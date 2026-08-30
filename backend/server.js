@@ -18,15 +18,16 @@ import { isValidRatchetStatus, recordRatchetStatus, getRatchetState, clearRatche
 import {
   createOrganization, getOrganization, getMembership, listMembers, addMember, removeMember,
   listOrgs, getDeviceOrg, listOrgDevices, addDeviceToOrg, removeDeviceFromOrg,
-  listDeviceAccess, grantDeviceAccess, revokeDeviceAccess, isAuthorizedForDevice
+  listDeviceAccess, grantDeviceAccess, revokeDeviceAccess, isAuthorizedForDevice, setOrgPlanStatus
 } from './auth/organizations.js';
 import { isEnforced as isAllowlistEnforced, addToAllowlist, removeFromAllowlist, listAllowlist } from './auth/device-allowlist.js';
 import { recordPairing, hasEverPaired, createRepairChallenge, consumeRepairChallenge, verifyBoardSignature } from './auth/repair.js';
 import db from './lib/db.js';
 import { dataDir } from './lib/data-dir.js';
 import { runBackup, pruneBackups, listBackups, backupsDir } from './lib/backup.js';
-import { isConfigured as isBillingConfigured, createCheckoutSession, handleWebhookEvent } from './payments/stripe.js';
+import { isConfigured as isBillingConfigured, createCheckoutSession, retrieveCheckoutSession, handleWebhookEvent } from './payments/stripe.js';
 import { listAllSubscriptions } from './payments/subscriptions.js';
+import { getLicenseCodeBySubscription, redeemLicenseCode } from './payments/licenseCodes.js';
 
 dotenv.config();
 
@@ -176,7 +177,7 @@ app.post('/billing/checkout', async (req, res) => {
   try {
     const origin = req.get('origin') || LANDING_ORIGIN;
     const session = await createCheckoutSession(email, {
-      successUrl: `${origin}/?checkout=success`,
+      successUrl: `${origin}/?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${origin}/?checkout=cancelled`
     });
     res.json({ url: session.url });
@@ -198,6 +199,35 @@ app.post('/billing/webhook', (req, res) => {
   } catch (error) {
     console.error('Webhook verification failed:', error.message);
     res.status(400).json({ error: 'Invalid signature' });
+  }
+});
+
+app.options('/billing/checkout-result', (req, res) => {
+  res.set('Access-Control-Allow-Origin', LANDING_ORIGIN);
+  res.set('Access-Control-Allow-Methods', 'GET');
+  res.status(204).end();
+});
+
+// Polled by the landing page's success screen (session_id comes back from Stripe's
+// {CHECKOUT_SESSION_ID} template var above) to display the license code once the webhook
+// has landed — checkout completing and our webhook arriving are two separate async events,
+// so "pending" is a normal, expected first response, not an error.
+app.get('/billing/checkout-result', async (req, res) => {
+  res.set('Access-Control-Allow-Origin', LANDING_ORIGIN);
+  if (!isBillingConfigured()) return res.status(503).json({ error: 'Billing is not configured yet' });
+
+  const sessionId = typeof req.query.session_id === 'string' ? req.query.session_id : '';
+  if (!sessionId) return res.status(400).json({ error: 'session_id is required' });
+
+  try {
+    const session = await retrieveCheckoutSession(sessionId);
+    if (!session.subscription) return res.json({ pending: true });
+    const record = getLicenseCodeBySubscription(session.subscription);
+    if (!record) return res.json({ pending: true });
+    res.json({ code: record.code });
+  } catch (error) {
+    console.error('Checkout result lookup failed:', error.message);
+    res.status(500).json({ error: 'Could not look up checkout result' });
   }
 });
 
@@ -602,6 +632,21 @@ app.post('/orgs', requirePhoneSession, (req, res) => {
   res.status(201).json(org);
 });
 
+app.post('/orgs/:orgId/redeem-license', requirePhoneSession, requireOrgAdmin, (req, res) => {
+  const code = req.body?.code;
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({ error: 'A license code is required' });
+  }
+  const redeemed = redeemLicenseCode(code, req.params.orgId);
+  if (!redeemed) {
+    activateHoneypot(getClientIp(req), 'Invalid or already-redeemed license code', { orgId: req.params.orgId });
+    return res.status(404).json({ error: 'That code is invalid or has already been used' });
+  }
+  setOrgPlanStatus(req.params.orgId, 'active');
+  logAdminAction(req.phoneDeviceId, 'license_redeemed', null, {}, req.params.orgId);
+  res.json({ status: 'active' });
+});
+
 app.get('/orgs/:orgId', requirePhoneSession, requireOrgMember, (req, res) => {
   const org = getOrganization(req.params.orgId);
   if (!org) return res.status(404).json({ error: 'Org not found' });
@@ -646,7 +691,7 @@ app.post('/orgs/:orgId/devices', requirePhoneSession, requireOrgAdmin, (req, res
     logAdminAction(req.phoneDeviceId, 'device_added_to_org', deviceId, {}, req.params.orgId);
     res.status(201).json(orgDevice);
   } catch (error) {
-    res.status(409).json({ error: error.message });
+    res.status(error.code === 'PLAN_REQUIRED' ? 402 : 409).json({ error: error.message });
   }
 });
 
@@ -748,6 +793,15 @@ app.get('/admin/forensics', requireAdmin, (req, res) => {
 // rather than the only copy being wherever Railway's volume happens to be.
 app.get('/admin/subscriptions', requireAdmin, (req, res) => {
   res.json({ subscriptions: listAllSubscriptions() });
+});
+
+// Support/ops lookup — a customer who lost the code shown on the landing page can be
+// helped by looking it up here, keyed by the Stripe subscription id already visible in
+// /admin/subscriptions above.
+app.get('/admin/license-codes/:subscriptionId', requireAdmin, (req, res) => {
+  const record = getLicenseCodeBySubscription(req.params.subscriptionId);
+  if (!record) return res.status(404).json({ error: 'No license code for that subscription' });
+  res.json(record);
 });
 
 app.get('/admin/backups', requireAdmin, (req, res) => {

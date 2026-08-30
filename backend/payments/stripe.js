@@ -1,5 +1,6 @@
 import Stripe from 'stripe';
 import { recordSubscription } from './subscriptions.js';
+import { createLicenseCode } from './licenseCodes.js';
 
 let cachedClient = null;
 
@@ -14,6 +15,12 @@ function getClient() {
 
 export function isConfigured() {
   return Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PRICE_ID_TEAM && process.env.STRIPE_WEBHOOK_SECRET);
+}
+
+export async function retrieveCheckoutSession(sessionId) {
+  const client = getClient();
+  if (!client) throw new Error('Stripe is not configured (STRIPE_SECRET_KEY unset)');
+  return client.checkout.sessions.retrieve(sessionId);
 }
 
 export async function createCheckoutSession(email, { successUrl, cancelUrl }) {
@@ -48,6 +55,10 @@ export function handleWebhookEvent(rawBody, signatureHeader) {
       plan: 'team',
       status: 'active'
     });
+    // There's no account/email system to tie this payment to a device-keyed org, so a
+    // one-time code is the bridge: generated here, shown on the landing page's success
+    // screen, and redeemed by the org owner in the app (see /orgs/:orgId/redeem-license).
+    createLicenseCode({ stripeSubscriptionId: obj.subscription, stripeCustomerId: obj.customer });
   } else if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
     recordSubscription({
       stripeSubscriptionId: obj.id,

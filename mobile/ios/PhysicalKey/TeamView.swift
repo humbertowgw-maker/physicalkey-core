@@ -111,7 +111,10 @@ private struct OrgDetailView: View {
     let org: PhysicalKeyAPI.OrgDetail
 
     @State private var showingAddMember = false
+    @State private var showingRedeemLicense = false
     @State private var isScanning = false
+
+    private var isTeamPlanActive: Bool { org.planStatus == "active" }
 
     var body: some View {
         List {
@@ -121,6 +124,15 @@ private struct OrgDetailView: View {
                     Text(org.id)
                         .font(.caption.monospaced())
                         .textSelection(.enabled)
+                }
+                LabeledContent("Plan") {
+                    Text(isTeamPlanActive ? "Team" : "Free — 1 device")
+                        .foregroundStyle(isTeamPlanActive ? .green : .secondary)
+                }
+                if viewModel.canManage && !isTeamPlanActive {
+                    Button("Redeem License Code", systemImage: "key.viewfinder") {
+                        showingRedeemLicense = true
+                    }
                 }
             }
 
@@ -192,6 +204,10 @@ private struct OrgDetailView: View {
                             Text("Hold your phone near the key device…")
                                 .foregroundStyle(.secondary)
                         }
+                    } else if org.devices.count >= 1 && !isTeamPlanActive {
+                        Text("Redeem a license code above to add another device.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     } else {
                         Button("Claim a Nearby Key Device", systemImage: "key") {
                             isScanning = true
@@ -207,6 +223,11 @@ private struct OrgDetailView: View {
         .sheet(isPresented: $showingAddMember) {
             AddMemberSheet { deviceId, role in
                 Task { await viewModel.addMember(deviceId: deviceId, role: role) }
+            }
+        }
+        .sheet(isPresented: $showingRedeemLicense) {
+            RedeemLicenseSheet { code in
+                Task { await viewModel.redeemLicense(code: code) }
             }
         }
     }
@@ -244,6 +265,40 @@ private struct AddMemberSheet: View {
                         dismiss()
                     }
                     .disabled(deviceId.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+private struct RedeemLicenseSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var code = ""
+    let onSubmit: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("XXXX-XXXX-XXXX", text: $code)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.characters)
+                        .font(.body.monospaced())
+                } footer: {
+                    Text("Shown on the checkout page after subscribing to the Team plan.")
+                }
+            }
+            .navigationTitle("Redeem License")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Redeem") {
+                        onSubmit(code)
+                        dismiss()
+                    }
+                    .disabled(code.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }

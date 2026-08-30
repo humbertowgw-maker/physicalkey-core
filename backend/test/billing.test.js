@@ -137,3 +137,35 @@ test('GET /admin/subscriptions requires an admin token', async () => {
   const res = await fetch(`${configured.baseUrl}/admin/subscriptions`);
   assert.equal(res.status, 401);
 });
+
+test('checkout.session.completed also generates a redeemable license code, since there is no account/email system to bind the payment to an org directly', async () => {
+  const { payload, header } = signedCheckoutPayload({
+    subscriptionId: 'sub_for_license_code', customerId: 'cus_for_license_code', email: 'license-test@example.com'
+  });
+
+  const webhookRes = await fetch(`${configured.baseUrl}/billing/webhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'stripe-signature': header },
+    body: payload
+  });
+  assert.equal(webhookRes.status, 200);
+
+  const res = await fetch(`${configured.baseUrl}/admin/license-codes/sub_for_license_code`, {
+    headers: { Authorization: `Bearer ${configuredAdminToken}` }
+  });
+  assert.equal(res.status, 200);
+  const record = await res.json();
+  assert.match(record.code, /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+  assert.equal(record.stripe_subscription_id, 'sub_for_license_code');
+  assert.equal(record.redeemed_at, null, 'a fresh code should not already be redeemed');
+});
+
+test('GET /admin/license-codes/:subscriptionId 404s for an unknown subscription, and requires an admin token', async () => {
+  const noToken = await fetch(`${configured.baseUrl}/admin/license-codes/sub_never_existed`);
+  assert.equal(noToken.status, 401);
+
+  const withToken = await fetch(`${configured.baseUrl}/admin/license-codes/sub_never_existed`, {
+    headers: { Authorization: `Bearer ${configuredAdminToken}` }
+  });
+  assert.equal(withToken.status, 404);
+});

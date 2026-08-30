@@ -104,6 +104,8 @@ struct PhysicalKeyAPI {
         let ownerDeviceId: String
         let createdAt: Double
         let status: String
+        /// 'none' (free — one device) or 'active' (Team plan redeemed — see redeemLicense).
+        let planStatus: String
         let members: [OrgMember]
         let devices: [OrgDevice]
 
@@ -111,6 +113,7 @@ struct PhysicalKeyAPI {
             case id, name, status, members, devices
             case ownerDeviceId = "owner_device_id"
             case createdAt = "created_at"
+            case planStatus = "plan_status"
         }
     }
 
@@ -173,6 +176,17 @@ struct PhysicalKeyAPI {
 
     func revokeDeviceAccess(orgId: String, deviceId: String, memberDeviceId: String, phoneSessionToken: String) async throws {
         let _: StatusResponse = try await delete("/orgs/\(orgId)/devices/\(deviceId)/access/\(memberDeviceId)", bearer: phoneSessionToken)
+    }
+
+    // MARK: - Team plan licensing
+    // There's no account/email system tying a Stripe payment to a device-keyed org, so a
+    // one-time code (shown on the landing page after checkout) is the bridge — see
+    // backend/payments/licenseCodes.js and POST /orgs/:orgId/redeem-license.
+
+    @discardableResult
+    func redeemLicense(orgId: String, code: String, phoneSessionToken: String) async throws -> String {
+        let response: StatusResponse = try await post("/orgs/\(orgId)/redeem-license", body: ["code": code], bearer: phoneSessionToken)
+        return response.status
     }
 
     struct ProfileResponse: Decodable {

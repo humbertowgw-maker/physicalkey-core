@@ -106,14 +106,13 @@ final class OrganizationViewModel: ObservableObject {
     }
 
     func listOrgs() async {
-        guard let phoneSessionToken = self.phoneSessionToken else { return }
         do {
             let orgs = try await api.listOrgs(phoneSessionToken: phoneSessionToken)
             // Store the first org as the "known" org for convenience,
             // or you could keep them all in a separate published property.
             if let firstOrg = orgs.first {
-                self.org = firstOrg
                 UserDefaults.standard.set(firstOrg.id, forKey: Self.orgIdDefaultsKey)
+                await refresh(orgId: firstOrg.id)
             }
         } catch {
             errorMessage = Self.describe(error)
@@ -157,6 +156,22 @@ final class OrganizationViewModel: ObservableObject {
         } catch {
             bluetooth.disconnect()
             errorMessage = Self.describe(error)
+        }
+    }
+
+    /// Redeems a one-time code (shown on the landing page after a Team checkout) onto
+    /// the current org — see PhysicalKeyAPI.redeemLicense and POST /orgs/:orgId/redeem-license.
+    /// Success unlocks adding a second device to this org; a stale/reused/mistyped code
+    /// surfaces the backend's own error message rather than a generic failure.
+    func redeemLicense(code: String) async -> Bool {
+        guard let orgId = org?.id else { return false }
+        do {
+            _ = try await api.redeemLicense(orgId: orgId, code: code, phoneSessionToken: phoneSessionToken)
+            await refresh(orgId: orgId)
+            return true
+        } catch {
+            errorMessage = Self.describe(error)
+            return false
         }
     }
 

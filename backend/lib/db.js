@@ -180,6 +180,21 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(stripe_customer_id);
+
+  -- A one-time code generated when a Team checkout completes (see payments/stripe.js's
+  -- webhook handler) and shown to the payer on the landing page. There is no email/account
+  -- concept tying a Stripe customer to a device-keyed org, so this code is the bridge: the
+  -- org owner enters it in the app to redeem the org onto the Team plan.
+  CREATE TABLE IF NOT EXISTS license_codes (
+    code TEXT PRIMARY KEY,
+    stripe_subscription_id TEXT NOT NULL,
+    stripe_customer_id TEXT NOT NULL,
+    org_id TEXT REFERENCES organizations(id),
+    redeemed_at INTEGER,
+    created_at INTEGER NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_license_codes_subscription ON license_codes(stripe_subscription_id);
 `);
 
 // Migration for a database created before next_proof/verified_by/'unverifiable' existed
@@ -230,5 +245,13 @@ if (!adminActionsColumns.includes('hash')) {
 // Only safe to create once org_id is guaranteed to exist — on a fresh database this is a
 // no-op right after CREATE TABLE; on an existing one, only after the migration above.
 db.exec('CREATE INDEX IF NOT EXISTS idx_admin_actions_org ON admin_actions(org_id)');
+
+// Migration for a database created before the Team plan was actually enforced. Every
+// existing org predates real billing, so 'none' (the default) is correct — none of them
+// have paid for anything; the free single-owner/single-device shape stays free either way.
+const organizationsColumns = db.prepare("PRAGMA table_info(organizations)").all().map((c) => c.name);
+if (!organizationsColumns.includes('plan_status')) {
+  db.exec("ALTER TABLE organizations ADD COLUMN plan_status TEXT NOT NULL DEFAULT 'none'");
+}
 
 export default db;
