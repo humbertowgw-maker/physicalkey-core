@@ -112,6 +112,53 @@ test('redeeming a valid code unlocks a second device on that org', async () => {
   assert.equal(second.status, 201, 'a second device should now succeed after redeeming a valid code');
 });
 
+async function cancelSubscriptionWebhook(subscriptionId) {
+  const payload = JSON.stringify({
+    id: `evt_cancel_${subscriptionId}`,
+    object: 'event',
+    type: 'customer.subscription.deleted',
+    data: { object: { id: subscriptionId, customer: `cus_${subscriptionId}`, status: 'canceled' } }
+  });
+  const header = stripeTestClient.webhooks.generateTestHeaderString({ payload, secret: WEBHOOK_SECRET });
+  const res = await fetch(`${server.baseUrl}/billing/webhook`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'stripe-signature': header },
+    body: payload
+  });
+  assert.equal(res.status, 200);
+}
+
+test('canceling the subscription behind a redeemed code reverts the org to free, blocking a further device', async () => {
+  const owner = await phoneSession('license-owner-5');
+  const org = await createOrg(owner, 'Cancel Reverts Org');
+
+  const deviceAKeys = keypair();
+  await fullAuth(server.baseUrl, 'license-bootstrap-5a', keypair(), 'license-device-5a', deviceAKeys);
+  await claimDevice(org.id, owner, 'license-device-5a');
+
+  const code = await generateLicenseCode('sub_cancel_reverts_test');
+  await fetch(`${server.baseUrl}/orgs/${org.id}/redeem-license`, {
+    method: 'POST', headers: orgHeaders(owner.phoneSessionToken),
+    body: JSON.stringify({ code })
+  });
+
+  const deviceBKeys = keypair();
+  await fullAuth(server.baseUrl, 'license-bootstrap-5b', keypair(), 'license-device-5b', deviceBKeys);
+  const beforeCancel = await claimDevice(org.id, owner, 'license-device-5b');
+  assert.equal(beforeCancel.status, 201, 'sanity check: second device works while the plan is active');
+
+  await cancelSubscriptionWebhook('sub_cancel_reverts_test');
+
+  const orgRes = await fetch(`${server.baseUrl}/orgs/${org.id}`, { headers: authHeader(owner.phoneSessionToken) });
+  const orgDetail = await orgRes.json();
+  assert.equal(orgDetail.plan_status, 'none', 'the org should revert to the free plan once its subscription is canceled');
+
+  const deviceCKeys = keypair();
+  await fullAuth(server.baseUrl, 'license-bootstrap-5c', keypair(), 'license-device-5c', deviceCKeys);
+  const afterCancel = await claimDevice(org.id, owner, 'license-device-5c');
+  assert.equal(afterCancel.status, 402, 'a third device must be blocked again now that the plan reverted');
+});
+
 test('a code cannot be redeemed twice', async () => {
   const owner1 = await phoneSession('license-owner-3a');
   const owner2 = await phoneSession('license-owner-3b');

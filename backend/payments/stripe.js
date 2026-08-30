@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import { recordSubscription } from './subscriptions.js';
-import { createLicenseCode } from './licenseCodes.js';
+import { createLicenseCode, getLicenseCodeBySubscription } from './licenseCodes.js';
+import { setOrgPlanStatus } from '../auth/organizations.js';
 
 let cachedClient = null;
 
@@ -60,12 +61,20 @@ export function handleWebhookEvent(rawBody, signatureHeader) {
     // screen, and redeemed by the org owner in the app (see /orgs/:orgId/redeem-license).
     createLicenseCode({ stripeSubscriptionId: obj.subscription, stripeCustomerId: obj.customer });
   } else if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
+    const status = event.type === 'customer.subscription.deleted' ? 'canceled' : obj.status;
     recordSubscription({
       stripeSubscriptionId: obj.id,
       stripeCustomerId: obj.customer,
       plan: 'team',
-      status: event.type === 'customer.subscription.deleted' ? 'canceled' : obj.status
+      status
     });
+    // If this subscription's code was ever redeemed onto an org, keep that org's plan in
+    // sync — otherwise a canceled/past-due subscription leaves the org permanently
+    // "active" forever, since redemption is a one-time code, not a live foreign key.
+    const licenseCode = getLicenseCodeBySubscription(obj.id);
+    if (licenseCode?.org_id) {
+      setOrgPlanStatus(licenseCode.org_id, status === 'active' ? 'active' : 'none');
+    }
   }
 
   return event;
