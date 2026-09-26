@@ -1021,7 +1021,20 @@ app.get('/api/honeypot/fake-database', (req, res) => {
 // what username/password a scanner tried, whether it only cloned or also attempted a
 // push, its user-agent — that's the "collect attacker techniques" half of Phase 2; the
 // honeypot logging and /admin/forensics dashboard it feeds already existed.
-const GIT_HTTP_BACKEND = execSync('git --exec-path').toString().trim() + '/git-http-backend';
+// Resolved on first request, not at boot: a missing git binary (e.g. a build that skipped
+// the Dockerfile) must only disable this decoy, never crash the real auth service.
+let gitHttpBackend;
+function resolveGitHttpBackend() {
+  if (gitHttpBackend === undefined) {
+    try {
+      gitHttpBackend = execSync('git --exec-path').toString().trim() + '/git-http-backend';
+    } catch (err) {
+      console.error('Honeypot git repo disabled: git not available', err.message);
+      gitHttpBackend = null;
+    }
+  }
+  return gitHttpBackend;
+}
 
 app.all(/^\/backup\.git(\/.*)?$/, (req, res) => {
   const creds = parseBasicAuth(req);
@@ -1048,7 +1061,9 @@ app.all(/^\/backup\.git(\/.*)?$/, (req, res) => {
     SERVER_SOFTWARE: 'physicalkey-honeypot'
   };
 
-  const child = spawn(GIT_HTTP_BACKEND, [], { env, cwd: dataDir });
+  const backend = resolveGitHttpBackend();
+  if (!backend) return res.status(404).end();
+  const child = spawn(backend, [], { env, cwd: dataDir });
   req.pipe(child.stdin);
 
   let headerBuf = Buffer.alloc(0);
@@ -1117,7 +1132,11 @@ if (process.env.NODE_ENV !== 'test') {
   scheduledBackup();
 }
 
-ensureBaitRepo();
+try {
+  ensureBaitRepo();
+} catch (err) {
+  console.error('Honeypot bait repo not created:', err.message);
+}
 
 // Start server
 const PORT = process.env.PORT || 3000;
